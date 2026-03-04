@@ -1,7 +1,11 @@
 ---
 - name: Run kubeadm init
   ansible.builtin.command:
-    cmd: kubeadm init --pod-network-cidr=192.168.0.0/16 --apiserver-advertise-address={{ ansible_default_ipv4.address }}
+    cmd: >
+      kubeadm init
+      --pod-network-cidr=192.168.0.0/16
+      --apiserver-advertise-address={{ ansible_default_ipv4.address }}
+      --cri-socket=unix:///run/containerd/containerd.sock
     creates: /etc/kubernetes/admin.conf
 
 - name: Create .kube directory for ubuntu user
