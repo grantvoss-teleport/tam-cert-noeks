@@ -29,6 +29,7 @@ variable "node2_ip"         { default = "172.49.20.232" }
 variable "training_prefix"  { default = "grant-tam" }
 variable "customer_ip"      { default = "136.25.0.29/32" }
 variable "instance_type"    { default = "t3.medium" } # 2 vCPU, 4GB RAM
+variable "key_pair_name"    { default = "grant-tam-key" }
 variable "tf_state_bucket"  { description = "S3 bucket used for Terraform state" }
 variable "github_repo"      { default = "https://raw.githubusercontent.com/<your-org>/tam-cert-noeks/main" }
 
