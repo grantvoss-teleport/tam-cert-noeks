@@ -83,6 +83,7 @@ resource "aws_vpc" "main" {
 resource "aws_subnet" "main" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = var.subnet_cidr
+  availability_zone       = "us-west-2a"
   map_public_ip_on_launch = true
   tags = { Name = "${var.training_prefix}-subnet-1" }
 }
@@ -218,7 +219,7 @@ locals {
 
 resource "aws_instance" "master" {
   ami                    = data.aws_ami.ubuntu.id
-  instance_type          = "t2.small"
+  instance_type          = var.instance_type
   key_name               = aws_key_pair.main.key_name
   vpc_security_group_ids = [aws_security_group.main.id]
   subnet_id              = aws_subnet.main.id
@@ -237,7 +238,7 @@ resource "aws_instance" "master" {
 
 resource "aws_instance" "node1" {
   ami                    = data.aws_ami.ubuntu.id
-  instance_type          = "t2.small"
+  instance_type          = var.instance_type
   key_name               = aws_key_pair.main.key_name
   vpc_security_group_ids = [aws_security_group.main.id]
   subnet_id              = aws_subnet.main.id
@@ -256,7 +257,7 @@ resource "aws_instance" "node1" {
 
 resource "aws_instance" "node2" {
   ami                    = data.aws_ami.ubuntu.id
-  instance_type          = "t2.small"
+  instance_type          = var.instance_type
   key_name               = aws_key_pair.main.key_name
   vpc_security_group_ids = [aws_security_group.main.id]
   subnet_id              = aws_subnet.main.id
