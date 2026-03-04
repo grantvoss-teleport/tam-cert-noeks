@@ -1,0 +1,7 @@
+---
+- name: Ansible Playbook for configuring Kubernetes master
+  hosts: master
+  roles:
+    - k8s-master
+  remote_user: ubuntu
+  become: yes

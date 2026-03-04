@@ -1,0 +1,4 @@
+terraform/*.pem
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/tfplan

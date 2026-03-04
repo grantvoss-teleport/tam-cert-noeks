@@ -1,0 +1,7 @@
+---
+- name: Ansible Playbook for configuring Kubernetes base install
+  hosts: all
+  roles:
+    - k8s-setup
+  remote_user: ubuntu
+  become: yes

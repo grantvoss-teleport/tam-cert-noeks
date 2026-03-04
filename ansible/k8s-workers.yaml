@@ -1,0 +1,7 @@
+---
+- name: Ansible Playbook for configuring Kubernetes workers
+  hosts: workers
+  roles:
+    - k8s-workers
+  remote_user: ubuntu
+  become: yes
