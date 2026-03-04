@@ -148,3 +148,22 @@ jobs:
           (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
           (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
         run: terraform output
+
+      - name: Save private key to artifact
+        if: |
+          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
+        run: |
+          mkdir -p /tmp/keys
+          terraform output -raw private_key_pem > /tmp/keys/grant-tam-key.pem
+          chmod 600 /tmp/keys/grant-tam-key.pem
+
+      - name: Upload private key artifact
+        if: |
+          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
+        uses: actions/upload-artifact@v4
+        with:
+          name: grant-tam-key
+          path: /tmp/keys/grant-tam-key.pem
+          retention-days: 1
