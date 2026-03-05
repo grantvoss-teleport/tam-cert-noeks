@@ -5,6 +5,3 @@
     - teleport
   remote_user: ubuntu
   become: yes
-  vars:
-    rds_address: "{{ lookup('env', 'RDS_ADDRESS') }}"
-    db_password: "{{ lookup('env', 'DB_PASSWORD') }}"

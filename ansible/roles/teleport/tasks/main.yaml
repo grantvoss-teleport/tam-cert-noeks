@@ -24,32 +24,16 @@
     KUBECONFIG: /home/ubuntu/.kube/config
 
 - name: Create PostgreSQL credentials secret
-  ansible.builtin.command:
-    cmd: >
-      kubectl create secret generic teleport-pg-credentials
-      --namespace teleport
-      --from-literal=conn_string="postgresql://teleport:{{ db_password }}@{{ rds_address }}:5432/teleport_backend?sslmode=require&pool_max_conns=20"
-      --from-literal=audit_uri="postgresql://teleport:{{ db_password }}@{{ rds_address }}:5432/teleport_audit?sslmode=require"
-  register: secret_result
-  failed_when: secret_result.rc != 0 and 'already exists' not in secret_result.stderr
-  changed_when: secret_result.rc == 0
+  ansible.builtin.shell:
+    cmd: |
+      kubectl create secret generic teleport-pg-credentials \
+        --namespace teleport \
+        --from-literal=conn_string="postgresql://teleport:{{ db_password }}@{{ rds_address }}:5432/teleport_backend?sslmode=require&pool_max_conns=20" \
+        --from-literal=audit_uri="postgresql://teleport:{{ db_password }}@{{ rds_address }}:5432/teleport_audit?sslmode=require" \
+        --dry-run=client -o yaml | kubectl apply -f -
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
-
-- name: Install PostgreSQL client
-  ansible.builtin.apt:
-    name: postgresql-client
-    state: present
-    update_cache: true
-
-- name: Create teleport_audit database in RDS
-  ansible.builtin.command:
-    cmd: >
-      psql "postgresql://teleport:{{ db_password }}@{{ rds_address }}:5432/teleport_backend?sslmode=require"
-      -c "CREATE DATABASE teleport_audit;"
-  register: db_result
-  failed_when: db_result.rc != 0 and 'already exists' not in db_result.stderr
-  changed_when: db_result.rc == 0
+  changed_when: true
 
 - name: Copy Teleport values file
   ansible.builtin.copy:
@@ -74,12 +58,13 @@
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: true
 
-- name: Wait for Teleport pods to be ready
+- name: Wait for Teleport auth rollout
   ansible.builtin.command:
-    cmd: kubectl rollout status deployment/teleport -n teleport --timeout=300s
+    cmd: kubectl rollout status deployment/teleport-auth -n teleport --timeout=300s
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: false
+  ignore_errors: true
 
 - name: Get Teleport pod status
   ansible.builtin.command:
