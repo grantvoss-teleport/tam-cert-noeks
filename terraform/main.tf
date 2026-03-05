@@ -206,6 +206,7 @@ locals {
     mkdir -p "$ANSIBLE_DIR/roles/k8s-setup/defaults"
     mkdir -p "$ANSIBLE_DIR/roles/k8s-master/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/k8s-workers/tasks"
+    mkdir -p "$ANSIBLE_DIR/roles/teleport/tasks"
 
     # Wait for network and GitHub to be reachable
     until curl -fsSL --max-time 5 https://raw.githubusercontent.com > /dev/null 2>&1; do
@@ -213,7 +214,7 @@ locals {
       sleep 5
     done
 
-    for f in ansible.cfg hosts k8s-setup.yaml k8s-master.yaml k8s-workers.yaml; do
+    for f in ansible.cfg hosts k8s-setup.yaml k8s-master.yaml k8s-workers.yaml teleport.yaml; do
       echo "Fetching ansible/$f..."
       curl -fsSL "$REPO/ansible/$f" -o "$ANSIBLE_DIR/$f" || { echo "ERROR: failed to fetch $f"; exit 1; }
     done
