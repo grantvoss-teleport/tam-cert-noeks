@@ -31,7 +31,7 @@ variable "customer_ip"      { default = "136.25.0.29/32" }
 variable "instance_type"    { default = "t3.medium" } # 2 vCPU, 4GB RAM
 variable "key_pair_name"    { default = "grant-tam-key" }
 variable "tf_state_bucket"  { description = "S3 bucket used for Terraform state" }
-variable "github_repo"      { default = "https://raw.githubusercontent.com/<your-org>/tam-cert-noeks/main" }
+variable "github_repo"      { default = "https://raw.githubusercontent.com/tam-cert/tam-cert-noeks/main" }
 
 # ─── SSH Key Pair ─────────────────────────────────────────────────────────────
 
@@ -142,17 +142,52 @@ resource "aws_security_group" "main" {
   tags = { Name = "${var.training_prefix}-SG" }
 }
 
-# ─── cloud-init: Master ───────────────────────────────────────────────────────
-# - Installs kubectl, kubeadm, kubelet, ansible
-# - Pulls ansible playbooks from GitHub
-# - Runs k8s-setup and k8s-master playbooks locally
+# ─── Locals ───────────────────────────────────────────────────────────────────
 
 locals {
+  common_tags = {
+    instance_metadata_tagging_req = "grant.voss@goteleport.com"
+  }
+
+  # ─── cloud-init: Master ─────────────────────────────────────────────────────
+  # Bootstraps the minimum needed to run Ansible.
+  # Ansible owns all containerd, Kubernetes, and cluster setup.
+
   master_userdata = <<-EOT
     #!/bin/bash
     set -euo pipefail
+    exec > >(tee /var/log/cloud-init-k8s.log) 2>&1
 
-    # Write SSH private key so Ansible can reach worker nodes
+    # ── Wait for apt lock released by unattended-upgrades ────────────────────
+    systemctl disable --now unattended-upgrades || true
+    systemctl disable --now apt-daily.timer || true
+    systemctl disable --now apt-daily-upgrade.timer || true
+    while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; do
+      echo "Waiting for apt lock..."
+      sleep 5
+    done
+
+    # ── Kernel modules & sysctl ──────────────────────────────────────────────
+    modprobe overlay
+    modprobe br_netfilter
+
+    cat <<EOF > /etc/modules-load.d/k8s.conf
+    overlay
+    br_netfilter
+    EOF
+
+    cat <<EOF > /etc/sysctl.d/k8s.conf
+    net.bridge.bridge-nf-call-iptables  = 1
+    net.bridge.bridge-nf-call-ip6tables = 1
+    net.ipv4.ip_forward                 = 1
+    EOF
+    sysctl --system
+
+    # ── Minimal dependencies for Ansible ────────────────────────────────────
+    apt-get update
+    apt-get install -y apt-transport-https ca-certificates curl gnupg ansible python3
+
+    # ── SSH private key for Ansible ──────────────────────────────────────────
     mkdir -p /home/ubuntu/.ssh
     cat <<'PRIVATEKEY' > /home/ubuntu/.ssh/id_rsa
     ${tls_private_key.main.private_key_pem}
@@ -160,62 +195,72 @@ locals {
     chmod 600 /home/ubuntu/.ssh/id_rsa
     chown ubuntu:ubuntu /home/ubuntu/.ssh/id_rsa
 
-    # Kubernetes apt repo
-    apt-get update
-    apt-get install -y apt-transport-https ca-certificates curl ansible
-    curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.35/deb/Release.key \
-      | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-    echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.35/deb/ /' \
-      > /etc/apt/sources.list.d/kubernetes.list
-    apt-get update
-    apt-get install -y kubeadm=1.35.2-1.1 kubelet=1.35.2-1.1 kubectl=1.35.2-1.1
-    apt-mark hold kubelet kubeadm kubectl
-
-    # Pull ansible files from GitHub
+    # ── Pull Ansible roles from GitHub ───────────────────────────────────────
     REPO="${var.github_repo}"
     ANSIBLE_DIR="/home/ubuntu/ansible"
-    mkdir -p "$ANSIBLE_DIR"
+    mkdir -p "$ANSIBLE_DIR/roles/k8s-setup/tasks"
+    mkdir -p "$ANSIBLE_DIR/roles/k8s-setup/defaults"
+    mkdir -p "$ANSIBLE_DIR/roles/k8s-master/tasks"
+    mkdir -p "$ANSIBLE_DIR/roles/k8s-workers/tasks"
 
-    for f in ansible.cfg hosts k8s-setup.yaml k8s-master.yaml k8s-workers.yaml; do
+    for f in ansible.cfg hosts k8s-setup.yaml k8s-master.yaml k8s-workers.yaml site.yaml; do
       curl -fsSL "$REPO/ansible/$f" -o "$ANSIBLE_DIR/$f"
     done
+
+    curl -fsSL "$REPO/ansible/roles/k8s-setup/tasks/main.yaml"    -o "$ANSIBLE_DIR/roles/k8s-setup/tasks/main.yaml"
+    curl -fsSL "$REPO/ansible/roles/k8s-setup/defaults/main.yaml" -o "$ANSIBLE_DIR/roles/k8s-setup/defaults/main.yaml"
+    curl -fsSL "$REPO/ansible/roles/k8s-master/tasks/main.yaml"   -o "$ANSIBLE_DIR/roles/k8s-master/tasks/main.yaml"
+    curl -fsSL "$REPO/ansible/roles/k8s-workers/tasks/main.yaml"  -o "$ANSIBLE_DIR/roles/k8s-workers/tasks/main.yaml"
 
     chown -R ubuntu:ubuntu "$ANSIBLE_DIR"
     cp "$ANSIBLE_DIR/ansible.cfg" /home/ubuntu/.ansible.cfg
 
-    # Run playbooks
+    # ── Run Ansible playbooks ────────────────────────────────────────────────
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-setup.yaml"   -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-master.yaml"  -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-workers.yaml" -i "$ANSIBLE_DIR/hosts" --become
   EOT
 
-  # ─── cloud-init: Workers ─────────────────────────────────────────────────
-  # - Installs kubeadm, kubelet
-  # - Master will SSH in via Ansible to complete join
+  # ─── cloud-init: Workers ────────────────────────────────────────────────────
+  # Bootstraps kernel params only. Ansible handles everything else.
 
   worker_userdata = <<-EOT
     #!/bin/bash
     set -euo pipefail
+    exec > >(tee /var/log/cloud-init-k8s.log) 2>&1
 
+    # ── Wait for apt lock released by unattended-upgrades ────────────────────
+    systemctl disable --now unattended-upgrades || true
+    systemctl disable --now apt-daily.timer || true
+    systemctl disable --now apt-daily-upgrade.timer || true
+    while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; do
+      echo "Waiting for apt lock..."
+      sleep 5
+    done
+
+    # ── Kernel modules & sysctl ──────────────────────────────────────────────
+    modprobe overlay
+    modprobe br_netfilter
+
+    cat <<EOF > /etc/modules-load.d/k8s.conf
+    overlay
+    br_netfilter
+    EOF
+
+    cat <<EOF > /etc/sysctl.d/k8s.conf
+    net.bridge.bridge-nf-call-iptables  = 1
+    net.bridge.bridge-nf-call-ip6tables = 1
+    net.ipv4.ip_forward                 = 1
+    EOF
+    sysctl --system
+
+    # ── Minimal dependencies ─────────────────────────────────────────────────
     apt-get update
-    apt-get install -y apt-transport-https ca-certificates curl python3
-    curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.35/deb/Release.key \
-      | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-    echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.35/deb/ /' \
-      > /etc/apt/sources.list.d/kubernetes.list
-    apt-get update
-    apt-get install -y kubeadm kubelet
-    apt-mark hold kubelet kubeadm
+    apt-get install -y apt-transport-https ca-certificates curl gnupg python3
   EOT
 }
 
 # ─── EC2 Instances ────────────────────────────────────────────────────────────
-
-locals {
-  common_tags = {
-    instance_metadata_tagging_req = "grant.voss@goteleport.com"
-  }
-}
 
 resource "aws_instance" "master" {
   ami                    = data.aws_ami.ubuntu.id
@@ -276,14 +321,14 @@ resource "aws_instance" "node2" {
 
 # ─── Outputs ──────────────────────────────────────────────────────────────────
 
-output "master_public_ip"   { value = aws_instance.master.public_ip }
-output "master_private_ip"  { value = aws_instance.master.private_ip }
-output "node1_private_ip"   { value = aws_instance.node1.private_ip }
-output "node2_private_ip"   { value = aws_instance.node2.private_ip }
+output "master_public_ip"  { value = aws_instance.master.public_ip }
+output "master_private_ip" { value = aws_instance.master.private_ip }
+output "node1_private_ip"  { value = aws_instance.node1.private_ip }
+output "node2_private_ip"  { value = aws_instance.node2.private_ip }
 output "private_key_pem" {
   value     = nonsensitive(tls_private_key.main.private_key_pem)
   sensitive = false
 }
-output "private_key_path"   { value = local_sensitive_file.private_key.filename }
-output "ubuntu_ami_id"      { value = data.aws_ami.ubuntu.id }
-output "ubuntu_ami_name"    { value = data.aws_ami.ubuntu.name }
+output "private_key_path"  { value = local_sensitive_file.private_key.filename }
+output "ubuntu_ami_id"     { value = data.aws_ami.ubuntu.id }
+output "ubuntu_ami_name"   { value = data.aws_ami.ubuntu.name }
