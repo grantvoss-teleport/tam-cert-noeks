@@ -165,14 +165,6 @@ resource "aws_security_group" "main" {
   }
 
   ingress {
-    description = "Teleport HTTPS/proxy from customer"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = [var.customer_ip]
-  }
-
-  ingress {
     description = "All traffic within cluster"
     from_port   = 0
     to_port     = 0
