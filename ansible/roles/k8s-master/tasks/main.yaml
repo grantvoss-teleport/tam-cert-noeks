@@ -1,4 +1,13 @@
 ---
+- name: Wait for containerd CRI to be responsive
+  ansible.builtin.command:
+    cmd: crictl --runtime-endpoint unix:///run/containerd/containerd.sock info
+  register: crictl_check
+  retries: 10
+  delay: 5
+  until: crictl_check.rc == 0
+  changed_when: false
+
 - name: Run kubeadm init
   ansible.builtin.command:
     cmd: >
