@@ -31,7 +31,10 @@ variable "customer_ip"      { default = "136.25.0.29/32" }
 variable "instance_type"    { default = "t3.medium" } # 2 vCPU, 4GB RAM
 variable "key_pair_name"    { default = "grant-tam-key" }
 variable "tf_state_bucket"  { description = "S3 bucket used for Terraform state" }
-variable "db_password"      { description = "Master password for RDS PostgreSQL instance" sensitive = true }
+variable "db_password" {
+  description = "Master password for RDS PostgreSQL instance"
+  sensitive   = true
+}
 variable "github_repo"      { default = "https://raw.githubusercontent.com/tam-cert/tam-cert-noeks/main" }
 
 # ─── SSH Key Pair ─────────────────────────────────────────────────────────────
