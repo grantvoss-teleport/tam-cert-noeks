@@ -1,0 +1,7 @@
+---
+- name: Deploy MetalLB load balancer
+  hosts: master
+  roles:
+    - metallb
+  remote_user: ubuntu
+  become: yes

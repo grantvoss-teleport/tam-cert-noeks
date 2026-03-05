@@ -1,0 +1,87 @@
+---
+- name: Add MetalLB Helm repo
+  ansible.builtin.command:
+    cmd: helm repo add metallb https://metallb.github.io/metallb
+  changed_when: false
+
+- name: Update Helm repos
+  ansible.builtin.command:
+    cmd: helm repo update
+  changed_when: false
+
+- name: Install MetalLB via Helm
+  ansible.builtin.command:
+    cmd: >
+      helm upgrade --install metallb metallb/metallb
+      --create-namespace
+      --namespace metallb-system
+      --wait
+      --timeout 5m
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Wait for MetalLB controller to be ready
+  ansible.builtin.command:
+    cmd: kubectl rollout status deployment/metallb-controller -n metallb-system --timeout=120s
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: false
+
+- name: Wait for MetalLB webhook to be ready
+  ansible.builtin.command:
+    cmd: kubectl wait --for=condition=ready pod -l component=controller -n metallb-system --timeout=120s
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: false
+
+- name: Get master node public IP
+  ansible.builtin.shell:
+    cmd: |
+      curl -fsSL --max-time 5 http://169.254.169.254/latest/meta-data/public-ipv4
+  register: master_public_ip
+  changed_when: false
+
+- name: Apply MetalLB IP address pool
+  ansible.builtin.command:
+    cmd: kubectl apply -f -
+    stdin: |
+      apiVersion: metallb.io/v1beta1
+      kind: IPAddressPool
+      metadata:
+        name: teleport-pool
+        namespace: metallb-system
+      spec:
+        addresses:
+          - {{ master_public_ip.stdout }}/32
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Apply MetalLB L2 advertisement
+  ansible.builtin.command:
+    cmd: kubectl apply -f -
+    stdin: |
+      apiVersion: metallb.io/v1beta1
+      kind: L2Advertisement
+      metadata:
+        name: teleport-l2
+        namespace: metallb-system
+      spec:
+        ipAddressPools:
+          - teleport-pool
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Verify Teleport service gets external IP
+  ansible.builtin.command:
+    cmd: kubectl get svc teleport -n teleport
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: svc_status
+  changed_when: false
+
+- name: Print Teleport service status
+  ansible.builtin.debug:
+    msg: "{{ svc_status.stdout_lines }}"

@@ -165,6 +165,14 @@ resource "aws_security_group" "main" {
   }
 
   ingress {
+    description = "Teleport HTTPS/proxy from customer"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [var.customer_ip]
+  }
+
+  ingress {
     description = "All traffic within cluster"
     from_port   = 0
     to_port     = 0
@@ -283,6 +291,7 @@ locals {
     mkdir -p "$ANSIBLE_DIR/roles/k8s-setup/defaults"
     mkdir -p "$ANSIBLE_DIR/roles/k8s-master/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/k8s-workers/tasks"
+    mkdir -p "$ANSIBLE_DIR/roles/metallb/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/teleport/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/teleport/templates"
 
@@ -292,7 +301,7 @@ locals {
       sleep 5
     done
 
-    for f in ansible.cfg hosts k8s-setup.yaml k8s-master.yaml k8s-workers.yaml teleport.yaml; do
+    for f in ansible.cfg hosts k8s-setup.yaml k8s-master.yaml k8s-workers.yaml metallb.yaml teleport.yaml; do
       echo "Fetching ansible/$f..."
       curl -fsSL "$REPO/ansible/$f" -o "$ANSIBLE_DIR/$f" || { echo "ERROR: failed to fetch $f"; exit 1; }
     done
@@ -315,6 +324,7 @@ locals {
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-setup.yaml"   -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-master.yaml"  -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-workers.yaml" -i "$ANSIBLE_DIR/hosts" --become
+    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/metallb.yaml"     -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport.yaml"    -i "$ANSIBLE_DIR/hosts" --become
   EOT
 
