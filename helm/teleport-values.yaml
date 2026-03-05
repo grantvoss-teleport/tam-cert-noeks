@@ -1,0 +1,80 @@
+# ─── Teleport Helm Values ─────────────────────────────────────────────────────
+# Chart: teleport/teleport-cluster v18.7.1
+# Cluster: grant-tam-teleport.gvteleport.com
+# Backend: AWS RDS PostgreSQL 17.6 (grant-tam-pg-1)
+
+clusterName: grant-tam-teleport.gvteleport.com
+
+# Use standalone mode with auth.teleportConfig overrides for PostgreSQL backend
+chartMode: standalone
+
+# Disable PVC persistence since we're using PostgreSQL backend
+persistence:
+  enabled: false
+
+# ACME / Let's Encrypt TLS
+acme: true
+acmeEmail: grant.voss@goteleport.com
+
+# Proxy listener mode - multiplex all protocols on port 443
+proxyListenerMode: multiplex
+
+# ─── Auth Service Configuration ───────────────────────────────────────────────
+auth:
+  teleportConfig:
+    teleport:
+      log:
+        output: stderr
+        severity: INFO
+      storage:
+        type: postgresql
+        # conn_string is injected via Kubernetes secret - see below
+        conn_string: ""
+        audit_events_uri:
+          - ""
+        audit_sessions_uri: ""
+
+  # Mount the RDS credentials secret into the auth pod
+  extraVolumes:
+    - name: teleport-pg-credentials
+      secret:
+        secretName: teleport-pg-credentials
+
+  extraVolumeMounts:
+    - name: teleport-pg-credentials
+      mountPath: /etc/teleport-pg
+      readOnly: true
+
+  # Pass connection strings via environment variables from the secret
+  extraEnv:
+    - name: TELEPORT_PG_CONN_STRING
+      valueFrom:
+        secretKeyRef:
+          name: teleport-pg-credentials
+          key: conn_string
+    - name: TELEPORT_PG_AUDIT_URI
+      valueFrom:
+        secretKeyRef:
+          name: teleport-pg-credentials
+          key: audit_uri
+
+# ─── Proxy Service Configuration ──────────────────────────────────────────────
+proxy:
+  teleportConfig:
+    teleport:
+      log:
+        output: stderr
+        severity: INFO
+    proxy_service:
+      https_keypairs_reload_interval: 12h
+
+# ─── High Availability ────────────────────────────────────────────────────────
+highAvailability:
+  replicaCount: 1  # increase to 2+ once PostgreSQL backend is confirmed working
+  requireAntiAffinity: false
+
+# ─── Authentication ───────────────────────────────────────────────────────────
+authentication:
+  type: local
+  localAuth: true
+  secondFactor: "otp"
