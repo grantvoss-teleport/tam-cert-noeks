@@ -203,14 +203,25 @@ locals {
     mkdir -p "$ANSIBLE_DIR/roles/k8s-master/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/k8s-workers/tasks"
 
-    for f in ansible.cfg hosts k8s-setup.yaml k8s-master.yaml k8s-workers.yaml site.yaml; do
-      curl -fsSL "$REPO/ansible/$f" -o "$ANSIBLE_DIR/$f"
+    # Wait for network and GitHub to be reachable
+    until curl -fsSL --max-time 5 https://raw.githubusercontent.com > /dev/null 2>&1; do
+      echo "Waiting for GitHub to be reachable..."
+      sleep 5
     done
 
-    curl -fsSL "$REPO/ansible/roles/k8s-setup/tasks/main.yaml"    -o "$ANSIBLE_DIR/roles/k8s-setup/tasks/main.yaml"
-    curl -fsSL "$REPO/ansible/roles/k8s-setup/defaults/main.yaml" -o "$ANSIBLE_DIR/roles/k8s-setup/defaults/main.yaml"
-    curl -fsSL "$REPO/ansible/roles/k8s-master/tasks/main.yaml"   -o "$ANSIBLE_DIR/roles/k8s-master/tasks/main.yaml"
-    curl -fsSL "$REPO/ansible/roles/k8s-workers/tasks/main.yaml"  -o "$ANSIBLE_DIR/roles/k8s-workers/tasks/main.yaml"
+    for f in ansible.cfg hosts k8s-setup.yaml k8s-master.yaml k8s-workers.yaml; do
+      echo "Fetching ansible/$f..."
+      curl -fsSL "$REPO/ansible/$f" -o "$ANSIBLE_DIR/$f" || { echo "ERROR: failed to fetch $f"; exit 1; }
+    done
+
+    for role_file in \
+      "roles/k8s-setup/tasks/main.yaml" \
+      "roles/k8s-setup/defaults/main.yaml" \
+      "roles/k8s-master/tasks/main.yaml" \
+      "roles/k8s-workers/tasks/main.yaml"; do
+      echo "Fetching ansible/$role_file..."
+      curl -fsSL "$REPO/ansible/$role_file" -o "$ANSIBLE_DIR/$role_file" || { echo "ERROR: failed to fetch $role_file"; exit 1; }
+    done
 
     chown -R ubuntu:ubuntu "$ANSIBLE_DIR"
     cp "$ANSIBLE_DIR/ansible.cfg" /home/ubuntu/.ansible.cfg
