@@ -1,0 +1,9 @@
+---
+- name: Bootstrap Teleport RBAC — Machine ID bot and rbac-manager role
+  hosts: master
+  become: false
+  remote_user: ubuntu
+  vars:
+    github_repository: "{{ lookup('env', 'GITHUB_REPOSITORY') }}"
+  roles:
+    - teleport-rbac

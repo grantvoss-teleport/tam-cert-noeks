@@ -1,0 +1,18 @@
+kind: login_rule
+version: v1
+metadata:
+  name: okta-team-trait
+  description: "Maps Okta groups attribute to internal.team trait for namespace/node scoping"
+spec:
+  priority: 0
+  traits_map:
+    # Passes through all existing traits unchanged
+    logins:
+      - external.logins
+    # Maps the Okta 'groups' attribute directly to internal.team
+    # Okta group name must match the target K8s namespace and EC2 node 'team' label exactly.
+    # e.g. Okta group 'platform' → internal.team = ['platform']
+    #      → kube-access scoped to namespace 'platform'
+    #      → ssh-access scoped to nodes with label team=platform
+    team:
+      - external.groups
