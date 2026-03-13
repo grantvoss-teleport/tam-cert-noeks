@@ -17,13 +17,20 @@
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: false
 
-- name: Create Teleport AWS OIDC integration via tctl
-  ansible.builtin.shell:
-    cmd: |
-      kubectl exec -n teleport \
-        $(kubectl get pod -n teleport -l app.kubernetes.io/component=auth \
-          -o jsonpath='{.items[0].metadata.name}') \
-        -- tctl create -f <<'EOF'
+- name: Get auth pod name
+  ansible.builtin.command:
+    cmd: >
+      kubectl get pod -n teleport -l app.kubernetes.io/component=auth
+      -o jsonpath='{.items[0].metadata.name}'
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: auth_pod
+  changed_when: false
+
+- name: Write OIDC integration YAML to master node
+  ansible.builtin.copy:
+    dest: /tmp/teleport-oidc-integration.yaml
+    content: |
       kind: integration
       sub_kind: aws-oidc
       version: v1
@@ -32,7 +39,22 @@
       spec:
         aws_oidc:
           role_arn: "{{ teleport_oidc_role_arn }}"
-      EOF
+    mode: "0644"
+
+- name: Copy integration YAML into auth pod
+  ansible.builtin.command:
+    cmd: >
+      kubectl cp /tmp/teleport-oidc-integration.yaml
+      teleport/{{ auth_pod.stdout }}:/tmp/teleport-oidc-integration.yaml
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Create Teleport AWS OIDC integration via tctl
+  ansible.builtin.command:
+    cmd: >
+      kubectl exec -n teleport {{ auth_pod.stdout }}
+      -- tctl create -f /tmp/teleport-oidc-integration.yaml
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
   register: tctl_result
@@ -44,9 +66,7 @@
 - name: Verify integration was created
   ansible.builtin.command:
     cmd: >
-      kubectl exec -n teleport
-      $(kubectl get pod -n teleport -l app.kubernetes.io/component=auth
-        -o jsonpath='{.items[0].metadata.name}')
+      kubectl exec -n teleport {{ auth_pod.stdout }}
       -- tctl get integration/grant-tam-teleport-integration
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
