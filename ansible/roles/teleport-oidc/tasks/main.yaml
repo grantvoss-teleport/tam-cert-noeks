@@ -31,17 +31,9 @@
 - name: Create Teleport AWS OIDC integration via tctl
   ansible.builtin.shell:
     cmd: |
-      kubectl exec -n teleport {{ auth_pod.stdout }} \
-        -- tctl create -f - <<EOF
-      kind: integration
-      sub_kind: aws-oidc
-      version: v1
-      metadata:
-        name: grant-tam-teleport-integration
-      spec:
-        aws_oidc:
-          role_arn: "{{ teleport_oidc_role_arn }}"
-      EOF
+      printf 'kind: integration\nsub_kind: aws-oidc\nversion: v1\nmetadata:\n  name: grant-tam-teleport-integration\nspec:\n  aws_oidc:\n    role_arn: "%s"\n' \
+        "{{ teleport_oidc_role_arn }}" | \
+      kubectl exec -i -n teleport {{ auth_pod.stdout }} -- tctl create -f -
     executable: /bin/bash
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
