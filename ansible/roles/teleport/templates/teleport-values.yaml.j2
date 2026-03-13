@@ -1,43 +1,26 @@
-clusterName: grant-tam-teleport.gvteleport.com
+ubuntu@ip-172-49-20-230:~$ REPO="https://raw.githubusercontent.com/tam-cert/tam-cert-noeks/main"
+curl -fsSL "$REPO/ansible/roles/teleport/templates/teleport-values.yaml.j2" \
+  -o ~/ansible/roles/teleport/templates/teleport-values.yaml.j2
 
-chartMode: standalone
+source ~/.teleport-env
+DB_PASSWORD=$(aws secretsmanager get-secret-value \
+  --secret-id $DB_SECRET_NAME --region us-west-2 \
+  --query SecretString --output text)
 
-enterprise: true
+python3 -c "
+with open('/home/ubuntu/ansible/roles/teleport/templates/teleport-values.yaml.j2') as f:
+    content = f.read()
+content = content.replace('{{ db_password }}', '$DB_PASSWORD')
+content = content.replace('{{ rds_address }}', '$RDS_ADDRESS')
+content = content.replace('{{ sessions_bucket }}', '$SESSIONS_BUCKET')
+with open('/home/ubuntu/teleport-values.yaml', 'w') as f:
+    f.write(content)
+"
 
-persistence:
-  enabled: false
-
-acme: true
-acmeEmail: grant.voss@goteleport.com
-
-proxyListenerMode: multiplex
-
-auth:
-  teleportConfig:
-    teleport:
-      log:
-        output: stderr
-        severity: INFO
-      storage:
-        type: postgresql
-        conn_string: "postgresql://teleport:{{ db_password }}@{{ rds_address }}:5432/teleport_backend?sslmode=require&pool_max_conns=20"
-        audit_events_uri:
-          - "postgresql://teleport:{{ db_password }}@{{ rds_address }}:5432/teleport_audit?sslmode=require"
-        audit_sessions_uri: "s3://{{ sessions_bucket }}/sessions?region=us-west-2"
-
-proxy:
-  teleportConfig:
-    teleport:
-      log:
-        output: stderr
-        severity: INFO
-    proxy_service:
-      https_keypairs_reload_interval: 12h
-
-highAvailability:
-  replicaCount: 1
-  requireAntiAffinity: false
-
+# Verify no duplicates
+grep -c "ports:" ~/teleport-values.yaml  # should return 1
+cat ~/teleport-values.yaml | grep -A10 "^service:"
+2
 service:
   spec:
     externalTrafficPolicy: Local
@@ -49,17 +32,12 @@ service:
       targetPort: 3080
       protocol: TCP
       nodePort: 32443
-  ports:
-    - name: tls
-      port: 443
-      targetPort: 3080
-      protocol: TCP
-    - name: diag
-      port: 3000
-      targetPort: 3000
-      protocol: TCP
+ubuntu@ip-172-49-20-230:~$ kubectl patch svc teleport -n teleport \
+  --type='json' \
+  -p='[{"op":"replace","path":"/spec/ports/0/nodePort","value":32443}]'
 
-authentication:
-  type: local
-  localAuth: true
-  secondFactor: "otp"
+kubectl get svc teleport -n teleport
+# Should show 443:32443/TCP with healthCheckNodePort 32444
+service/teleport patched
+NAME       TYPE           CLUSTER-IP     EXTERNAL-IP     PORT(S)         AGE
+teleport   LoadBalancer   10.100.160.1   172.49.20.100   443:32443/TCP   3m52s

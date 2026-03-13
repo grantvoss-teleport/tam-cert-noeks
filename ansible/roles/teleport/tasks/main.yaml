@@ -118,6 +118,27 @@
   changed_when: false
   ignore_errors: true
 
+- name: Pin Teleport NodePort to 32443
+  ansible.builtin.command:
+    cmd: >
+      kubectl patch svc teleport -n teleport
+      --type='json'
+      -p='[{"op":"replace","path":"/spec/ports/0/nodePort","value":32443}]'
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+  ignore_errors: true
+
+- name: Pin Teleport healthCheckNodePort to 32444
+  ansible.builtin.command:
+    cmd: >
+      kubectl patch svc teleport -n teleport
+      -p='{"spec":{"healthCheckNodePort":32444}}'
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+  ignore_errors: true
+
 - name: Get Teleport pod status
   ansible.builtin.command:
     cmd: kubectl get pods -n teleport
