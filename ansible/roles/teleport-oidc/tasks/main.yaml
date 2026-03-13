@@ -42,6 +42,10 @@
     - '"already exists" not in tctl_result.stderr'
   changed_when: tctl_result.rc == 0
 
+- name: Wait for integration to be persisted
+  ansible.builtin.pause:
+    seconds: 5
+
 - name: Verify integration was created
   ansible.builtin.command:
     cmd: >
