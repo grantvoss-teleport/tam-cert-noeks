@@ -36,6 +36,10 @@ highAvailability:
   replicaCount: 1
   requireAntiAffinity: false
 
+service:
+  spec:
+    externalTrafficPolicy: Local
+
 authentication:
   type: local
   localAuth: true
