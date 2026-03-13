@@ -1,0 +1,29 @@
+---
+# Bot identity for GitHub Actions RBAC automation.
+# Uses the GitHub join method — no static secrets or tokens stored anywhere.
+# The bot exchanges a GitHub Actions OIDC JWT for a short-lived Teleport cert.
+kind: token
+version: v2
+metadata:
+  name: rbac-github-bot-token
+spec:
+  roles: [Bot]
+  join_method: github
+  bot_name: rbac-github-bot
+  github:
+    allow:
+      # Only permit runs from this repo against the main branch.
+      # Adjust repository to match your fork/org if needed.
+      - repository: "{{ github_repository }}"
+        ref_type: branch
+        ref: refs/heads/main
+---
+# The bot itself — holds only the rbac-manager role.
+# tctl bots add is idempotent in Teleport 18.x.
+kind: bot
+version: v1
+metadata:
+  name: rbac-github-bot
+spec:
+  roles:
+    - rbac-manager

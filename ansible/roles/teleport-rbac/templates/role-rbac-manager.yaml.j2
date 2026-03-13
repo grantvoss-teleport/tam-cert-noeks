@@ -1,0 +1,23 @@
+kind: role
+version: v7
+metadata:
+  name: rbac-manager
+  description: "Machine ID role: grants tctl rights to manage RBAC resources only"
+spec:
+  allow:
+    rules:
+      # Manage Teleport roles
+      - resources: [role]
+        verbs: [create, read, update, delete, list]
+      # Manage login rules (SSO trait mapping)
+      - resources: [login_rule]
+        verbs: [create, read, update, delete, list]
+      # Manage SAML connectors (for base role wildcard patch)
+      - resources: [saml]
+        verbs: [create, read, update, delete, list]
+      # Manage bots and join tokens (for auto-approver bot)
+      - resources: [bot, token]
+        verbs: [create, read, update, delete, list]
+  deny: {}
+  options:
+    max_session_ttl: 1h

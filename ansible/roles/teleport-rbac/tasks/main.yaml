@@ -1,0 +1,91 @@
+---
+# teleport-rbac/tasks/main.yaml
+#
+# Bootstraps ONLY the resources required before the GitHub Actions Machine ID
+# bot can take over:
+#   1. rbac-manager role  — scoped tctl permissions for the bot
+#   2. Bot join token     — GitHub OIDC join method, no static secrets
+#   3. Bot definition     — bound to rbac-manager role
+#
+# All subsequent RBAC resources (base, kube-access, ssh-access, etc.) are
+# applied by the GitHub Actions workflow using tbot + tctl, not by Ansible.
+# This keeps Ansible as a one-time bootstrapper rather than a privileged
+# persistent actor.
+
+- name: Get Teleport auth pod name
+  command: >
+    kubectl get pod -n teleport
+    -l app.kubernetes.io/component=auth
+    -o jsonpath='{.items[0].metadata.name}'
+  register: auth_pod
+  changed_when: false
+
+- name: Set auth pod fact
+  set_fact:
+    teleport_auth_pod: "{{ auth_pod.stdout }}"
+
+- name: Create temp dir for bootstrap manifests
+  tempfile:
+    state: directory
+    suffix: teleport-rbac-bootstrap
+  register: bootstrap_tmp
+
+# ── Render bootstrap templates ─────────────────────────────────────────────
+
+- name: Render rbac-manager role
+  template:
+    src: role-rbac-manager.yaml.j2
+    dest: "{{ bootstrap_tmp.path }}/role-rbac-manager.yaml"
+    mode: "0600"
+
+- name: Render Machine ID bot + join token
+  template:
+    src: machine-id-bot.yaml.j2
+    dest: "{{ bootstrap_tmp.path }}/machine-id-bot.yaml"
+    mode: "0600"
+  vars:
+    github_repository: "{{ lookup('env', 'GITHUB_REPOSITORY') }}"
+
+# ── Copy into auth pod and apply ───────────────────────────────────────────
+
+- name: Copy bootstrap manifests into auth pod
+  command: >
+    kubectl cp {{ bootstrap_tmp.path }}/{{ item }}
+    teleport/{{ teleport_auth_pod }}:/tmp/{{ item }}
+  loop:
+    - role-rbac-manager.yaml
+    - machine-id-bot.yaml
+  changed_when: true
+
+- name: Apply rbac-manager role
+  command: >
+    kubectl exec -n teleport {{ teleport_auth_pod }} --
+    tctl create -f /tmp/role-rbac-manager.yaml
+  register: r_mgr
+  changed_when: "'created' in r_mgr.stdout or 'updated' in r_mgr.stdout"
+
+- name: Apply Machine ID bot and join token
+  command: >
+    kubectl exec -n teleport {{ teleport_auth_pod }} --
+    tctl create -f /tmp/machine-id-bot.yaml
+  register: r_bot
+  changed_when: "'created' in r_bot.stdout or 'updated' in r_bot.stdout"
+  failed_when:
+    - r_bot.rc != 0
+    - "'already exists' not in r_bot.stderr"
+
+# ── Cleanup ────────────────────────────────────────────────────────────────
+
+- name: Remove temp bootstrap manifest directory
+  file:
+    path: "{{ bootstrap_tmp.path }}"
+    state: absent
+
+- name: Remind operator that RBAC resources are applied by GitHub Actions
+  debug:
+    msg: >
+      Bootstrap complete. The rbac-manager role, bot join token, and bot
+      definition have been created in Teleport. The GitHub Actions workflow
+      (.github/workflows/teleport-rbac.yml) will now apply all RBAC roles,
+      login rules, and the SAML connector patch using Machine ID (tbot).
+      No static credentials were written to disk.

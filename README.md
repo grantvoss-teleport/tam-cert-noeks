@@ -77,7 +77,6 @@ Kubernetes Nodes (t3.medium × 3, us-west-2a)
   └── node2   172.49.20.232   worker
         │
         ▼
-  MetalLB (L2, 172.49.20.100-150)
   Teleport Enterprise 18.7.1
         │
         ├── PostgreSQL backend  ──►  RDS PostgreSQL 17.6 (grant-tam-pg-1)
