@@ -66,18 +66,6 @@ resource "aws_lb_listener" "teleport_443" {
   }
 }
 
-# ─── Security Group: allow NLB traffic and health checks ──────────────────────
-
-resource "aws_security_group_rule" "nlb_to_teleport_443" {
-  type              = "ingress"
-  from_port         = 443
-  to_port           = 443
-  protocol          = "tcp"
-  cidr_blocks       = ["0.0.0.0/0"]
-  security_group_id = aws_security_group.main.id
-  description       = "Allow HTTPS traffic to Teleport via MetalLB"
-}
-
 # ─── Outputs ──────────────────────────────────────────────────────────────────
 
 output "nlb_dns_name" {
