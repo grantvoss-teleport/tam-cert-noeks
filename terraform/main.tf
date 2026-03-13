@@ -181,7 +181,7 @@ resource "aws_security_group" "main" {
   }
 
   ingress {
-    description = "NLB health check via Kubernetes healthCheckNodePort"
+    description = "NLB health check healthCheckNodePort"
     from_port   = 31916
     to_port     = 31916
     protocol    = "tcp"
