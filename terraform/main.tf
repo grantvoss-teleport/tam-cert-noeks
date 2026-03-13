@@ -28,12 +28,9 @@ variable "node1_ip"        { default = "172.49.20.231" }
 variable "node2_ip"        { default = "172.49.20.232" }
 variable "training_prefix" { default = "grant-tam" }
 variable "customer_ip"     { default = "136.25.0.29/32" }
-variable "instance_type"   { default = "t3.medium" } # 2 vCPU, 4GB RAM
+variable "instance_type"   { default = "t3.medium" }
 variable "key_pair_name"   { default = "grant-tam-key" }
 variable "tf_state_bucket" { description = "S3 bucket used for Terraform state" }
-variable "teleport_node_port"              { default = "32443" }
-variable "teleport_health_check_node_port" { default = "32444" }
-variable "github_repo"     { default = "https://raw.githubusercontent.com/tam-cert/tam-cert-noeks/main" }
 variable "db_password" {
   description = "Master password for RDS PostgreSQL instance"
   sensitive   = true
@@ -42,6 +39,9 @@ variable "teleport_license" {
   description = "Teleport Enterprise license file contents"
   sensitive   = true
 }
+variable "teleport_node_port"              { default = "32443" }
+variable "teleport_health_check_node_port" { default = "32444" }
+variable "github_repo"     { default = "https://raw.githubusercontent.com/tam-cert/tam-cert-noeks/main" }
 
 # ─── IAM Role for EC2 instances ──────────────────────────────────────────────
 
@@ -104,7 +104,7 @@ resource "local_sensitive_file" "private_key" {
 
 data "aws_ami" "ubuntu" {
   most_recent = true
-  owners      = ["099720109477"] # Canonical
+  owners      = ["099720109477"]
 
   filter {
     name   = "name"
@@ -183,16 +183,16 @@ resource "aws_security_group" "main" {
 
   ingress {
     description = "Teleport NodePort"
-    from_port   = 32059
-    to_port     = 32059
+    from_port   = 32443
+    to_port     = 32443
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
   ingress {
-    description = "NLB health check healthCheckNodePort"
-    from_port   = 31916
-    to_port     = 31916
+    description = "NLB health check via healthCheckNodePort"
+    from_port   = 32444
+    to_port     = 32444
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -222,10 +222,6 @@ locals {
     instance_metadata_tagging_req = "grant.voss@goteleport.com"
   }
 
-  # ─── cloud-init: Master ─────────────────────────────────────────────────────
-  # Bootstraps minimum deps, writes env file, pulls Ansible from GitHub,
-  # runs all playbooks including Teleport deployment.
-
   master_userdata = <<-EOT
     #!/bin/bash
     set -euo pipefail
@@ -252,7 +248,6 @@ locals {
       sleep 5
     done
 
-    # Repair any interrupted dpkg operations
     dpkg --configure -a || true
     sleep 5
 
@@ -321,7 +316,6 @@ locals {
     mkdir -p "$ANSIBLE_DIR/roles/teleport/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/teleport/templates"
 
-    # Wait for network and GitHub to be reachable
     until curl -fsSL --max-time 5 https://raw.githubusercontent.com > /dev/null 2>&1; do
       echo "Waiting for GitHub to be reachable..."
       sleep 5
@@ -337,6 +331,7 @@ locals {
       "roles/k8s-setup/defaults/main.yaml" \
       "roles/k8s-master/tasks/main.yaml" \
       "roles/k8s-workers/tasks/main.yaml" \
+      "roles/metallb/tasks/main.yaml" \
       "roles/teleport/tasks/main.yaml" \
       "roles/teleport/templates/teleport-values.yaml.j2"; do
       echo "Fetching ansible/$role_file..."
@@ -354,18 +349,13 @@ locals {
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport.yaml"    -i "$ANSIBLE_DIR/hosts" --become
   EOT
 
-  # ─── cloud-init: Workers ────────────────────────────────────────────────────
-  # Sets kernel params only. Ansible handles everything else.
-
   worker_userdata = <<-EOT
     #!/bin/bash
     set -euo pipefail
     exec > >(tee /var/log/cloud-init-k8s.log) 2>&1
 
-    # ── Prevent interactive prompts ──────────────────────────────────────────
     export DEBIAN_FRONTEND=noninteractive
 
-    # ── Wait for apt lock released by unattended-upgrades ────────────────────
     systemctl disable --now unattended-upgrades || true
     systemctl disable --now apt-daily.timer || true
     systemctl disable --now apt-daily-upgrade.timer || true
@@ -386,7 +376,6 @@ locals {
     dpkg --configure -a || true
     sleep 5
 
-    # ── Kernel modules & sysctl ──────────────────────────────────────────────
     modprobe overlay
     modprobe br_netfilter
 
@@ -402,7 +391,6 @@ locals {
     EOF
     sysctl --system
 
-    # ── Minimal dependencies ─────────────────────────────────────────────────
     apt_install() {
       for i in 1 2 3 4 5; do
         apt-get "$@" && return 0
