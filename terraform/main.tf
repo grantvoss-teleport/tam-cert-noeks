@@ -292,7 +292,7 @@ locals {
     export DB_SECRET_NAME="${aws_secretsmanager_secret.db_password.name}"
     export SESSIONS_BUCKET="${aws_s3_bucket.teleport_sessions.bucket}"
     export LICENSE_SECRET_NAME="${aws_secretsmanager_secret.teleport_license.name}"
-    export TELEPORT_OIDC_ROLE_ARN="${aws_iam_role.teleport_oidc.arn}"
+    export TELEPORT_OIDC_ROLE_ARN="${var.aws_oidc_role_arn}"
     EOF
     chmod 600 /home/ubuntu/.teleport-env
     chown ubuntu:ubuntu /home/ubuntu/.teleport-env
