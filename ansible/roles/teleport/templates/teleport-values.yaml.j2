@@ -39,6 +39,11 @@ highAvailability:
 service:
   spec:
     externalTrafficPolicy: Local
+  additionalPorts:
+    - name: diag
+      port: 3080
+      targetPort: 3080
+      protocol: TCP
 
 authentication:
   type: local
