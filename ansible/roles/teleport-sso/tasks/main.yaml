@@ -1,0 +1,62 @@
+---
+- name: Get auth pod name
+  ansible.builtin.command:
+    cmd: >
+      kubectl get pod -n teleport -l app.kubernetes.io/component=auth
+      -o jsonpath='{.items[0].metadata.name}'
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: auth_pod
+  changed_when: false
+
+# ─── Create Okta SAML connector ──────────────────────────────────────────────
+# okta_metadata_url: SAML metadata URL from Okta app Sign On tab
+# okta_groups_editor: Okta group name that maps to Teleport editor role
+# okta_groups_access: Okta group name that maps to Teleport access role
+
+- name: Create Okta SAML connector
+  ansible.builtin.shell:
+    cmd: |
+      printf 'kind: saml\nversion: v2\nmetadata:\n  name: okta\nspec:\n  display: "Okta"\n  acs: "https://grant-tam-teleport.gvteleport.com/v1/webapi/saml/acs/okta"\n  entity_descriptor_url: "%s"\n  attributes_to_roles:\n    - name: "groups"\n      value: "%s"\n      roles:\n        - editor\n    - name: "groups"\n      value: "%s"\n      roles:\n        - access\n' \
+        "{{ okta_metadata_url }}" \
+        "{{ okta_groups_editor }}" \
+        "{{ okta_groups_access }}" | \
+      kubectl exec -i -n teleport {{ auth_pod.stdout }} -- tctl create -f -
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: saml_result
+  failed_when:
+    - saml_result.rc != 0
+    - '"already exists" not in saml_result.stderr'
+  changed_when: saml_result.rc == 0
+
+# ─── Set Okta as default auth connector ──────────────────────────────────────
+
+- name: Set Okta as default authentication connector
+  ansible.builtin.shell:
+    cmd: |
+      printf 'kind: cluster_auth_preference\nversion: v2\nmetadata:\n  name: cluster-auth-preference\nspec:\n  type: saml\n  connector_name: okta\n  second_factor: "on"\n  webauthn:\n    rp_id: grant-tam-teleport.gvteleport.com\n' | \
+      kubectl exec -i -n teleport {{ auth_pod.stdout }} -- tctl create -f -
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Pause for resources to persist
+  ansible.builtin.pause:
+    seconds: 5
+
+- name: Verify SAML connector was created
+  ansible.builtin.command:
+    cmd: >
+      kubectl exec -n teleport {{ auth_pod.stdout }}
+      -- tctl get saml/okta
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: false
+  register: saml_verify
+
+- name: Print SAML connector status
+  ansible.builtin.debug:
+    msg: "{{ saml_verify.stdout_lines }}"

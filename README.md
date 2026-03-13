@@ -85,6 +85,9 @@ Navigate to **Settings → Secrets and variables → Actions** and add:
 | `DB_PASSWORD` | Master password for the RDS PostgreSQL instance |
 | `TELEPORT_LICENSE` | Teleport Enterprise license file contents (from teleport.sh dashboard) |
 | `AWS_OIDC_ARN` | ARN of the existing IAM role for Teleport AWS OIDC integration |
+| `OKTA_METADATA_URL` | SAML metadata URL from Okta app Sign On tab |
+| `OKTA_GROUPS_EDITOR` | Okta group name that maps to Teleport `editor` role |
+| `OKTA_GROUPS_ACCESS` | Okta group name that maps to Teleport `access` role |
 
 ### 3. GitHub Environment (Recommended)
 

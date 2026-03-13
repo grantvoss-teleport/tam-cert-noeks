@@ -1,0 +1,13 @@
+---
+- name: Configure Teleport Okta SAML SSO
+  hosts: master
+  roles:
+    - teleport-sso
+  remote_user: ubuntu
+  become: yes
+  vars:
+    # Metadata URL from Okta app → Sign On tab → Metadata URL
+    okta_metadata_url: "{{ lookup('env', 'OKTA_METADATA_URL') }}"
+    # Okta group names to map to Teleport roles
+    okta_groups_editor: "{{ lookup('env', 'OKTA_GROUPS_EDITOR') }}"
+    okta_groups_access: "{{ lookup('env', 'OKTA_GROUPS_ACCESS') }}"
