@@ -54,7 +54,7 @@
 
 - name: Set license secret name fact from env file
   ansible.builtin.set_fact:
-    license_secret_name: "{{ env_vars.stdout | regex_search('LICENSE_SECRET_NAME=(.+)', '\\1') | first }}"
+    license_secret_name: "{{ env_vars.stdout | regex_search('LICENSE_SECRET_NAME=(.+)', '\\1') | first | default('grant-tam/teleport/license') }}"
 
 - name: Fetch Teleport license from AWS Secrets Manager
   ansible.builtin.command:
