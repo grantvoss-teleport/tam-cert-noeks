@@ -47,15 +47,16 @@ jobs:
 
       # ── Authenticate via Machine ID (GitHub OIDC → short-lived X.509) ───
       # tbot exchanges the GitHub Actions OIDC JWT for a Teleport certificate.
-      # join-method: github must be explicit in Teleport 18.x — tbot no longer
-      # infers it from the token name alone.
+      # The join method (github) is determined by the token resource in Teleport,
+      # not passed as a parameter here. The token must exist in the cluster
+      # (created by Ansible teleport-rbac bootstrap step) before this can succeed.
+      # credential-ttl replaces the deprecated certificate-ttl in Teleport 18.x.
       - name: Authenticate with Teleport Machine ID
         uses: teleport-actions/auth@v2
         with:
           proxy: ${{ env.TELEPORT_PROXY }}
           token: ${{ env.TELEPORT_BOT_TOKEN }}
-          join-method: github
-          certificate-ttl: 10m
+          credential-ttl: 10m
           anonymous-telemetry: 0
 
       # ── Render Jinja2 templates → plain YAML ────────────────────────────
