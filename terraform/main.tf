@@ -12,10 +12,6 @@ terraform {
       source  = "hashicorp/local"
       version = "~> 2.0"
     }
-    null = {
-      source  = "hashicorp/null"
-      version = "~> 3.0"
-    }
   }
 }
 
@@ -296,6 +292,43 @@ locals {
 
     apt_install update
     apt_install install -y apt-transport-https ca-certificates curl gnupg ansible python3 unzip
+
+    # ── RDS teleport user bootstrap ──────────────────────────────────────────
+    # Runs inside the VPC using the master password injected by Terraform.
+    # Creates the 'teleport' PostgreSQL IAM user and grants rds_iam.
+    # After this block the password is never used again.
+    apt_install install -y postgresql-client
+    curl -fsSL https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem       -o /tmp/rds-ca.pem
+
+    RDS_ADDR="${aws_db_instance.teleport.address}"
+
+    until PGPASSWORD='${var.db_password}' PGSSLROOTCERT=/tmp/rds-ca.pem PGSSLMODE=require       psql "postgresql://teleport_admin@$RDS_ADDR:5432/teleport_backend" -c "SELECT 1"       > /dev/null 2>&1; do
+      echo "Waiting for RDS to be ready..."
+      sleep 10
+    done
+
+    PGPASSWORD='${var.db_password}' PGSSLROOTCERT=/tmp/rds-ca.pem PGSSLMODE=require       psql "postgresql://teleport_admin@$RDS_ADDR:5432/teleport_backend" <<SQLEOF
+    DO \$\$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'teleport') THEN
+        CREATE USER teleport;
+      END IF;
+    END
+    \$\$;
+    GRANT rds_iam TO teleport;
+    GRANT ALL PRIVILEGES ON DATABASE teleport_backend TO teleport;
+    SQLEOF
+
+    PGPASSWORD='${var.db_password}' PGSSLROOTCERT=/tmp/rds-ca.pem PGSSLMODE=require       psql "postgresql://teleport_admin@$RDS_ADDR:5432/postgres" <<SQLEOF
+    SELECT 'CREATE DATABASE teleport_audit'
+    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'teleport_audit')\gexec
+    SQLEOF
+
+    PGPASSWORD='${var.db_password}' PGSSLROOTCERT=/tmp/rds-ca.pem PGSSLMODE=require       psql "postgresql://teleport_admin@$RDS_ADDR:5432/teleport_audit" <<SQLEOF
+    GRANT ALL PRIVILEGES ON DATABASE teleport_audit TO teleport;
+    SQLEOF
+
+    echo "RDS bootstrap complete — teleport IAM user created"
 
     # Install AWS CLI v2
     curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
