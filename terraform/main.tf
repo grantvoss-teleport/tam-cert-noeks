@@ -32,7 +32,7 @@ variable "instance_type"   { default = "t3.medium" }
 variable "key_pair_name"   { default = "grant-tam-key" }
 variable "tf_state_bucket" { description = "S3 bucket used for Terraform state" }
 variable "db_password" {
-  description = "Master password for RDS PostgreSQL instance"
+  description = "Master password for RDS PostgreSQL instance (used only for initial DB setup, not by Teleport)"
   sensitive   = true
 }
 variable "teleport_license" {
@@ -41,9 +41,18 @@ variable "teleport_license" {
 }
 variable "teleport_node_port"              { default = "32443" }
 variable "teleport_health_check_node_port" { default = "32444" }
-variable "github_repo"     { default = "https://raw.githubusercontent.com/tam-cert/tam-cert-noeks/main" }
+variable "github_repo"     { default = "https://raw.githubusercontent.com/grantvoss-teleport/tam-cert-noeks/main" }
 variable "aws_oidc_role_arn" {
   description = "ARN of the existing IAM role for Teleport AWS OIDC integration"
+}
+variable "okta_metadata_url" {
+  description = "SAML metadata URL from Okta app Sign On tab"
+}
+variable "okta_groups_editor" {
+  description = "Okta group name mapped to Teleport editor role"
+}
+variable "okta_groups_access" {
+  description = "Okta group name mapped to Teleport access role"
 }
 
 # ─── IAM Role for EC2 instances ──────────────────────────────────────────────
@@ -63,6 +72,7 @@ resource "aws_iam_role" "ec2" {
   tags = local.common_tags
 }
 
+# Secrets Manager access — license only (DB password no longer needed by Teleport)
 resource "aws_iam_role_policy" "secrets_manager" {
   name = "${var.training_prefix}-secrets-manager-policy"
   role = aws_iam_role.ec2.id
@@ -73,7 +83,6 @@ resource "aws_iam_role_policy" "secrets_manager" {
       Effect   = "Allow"
       Action   = ["secretsmanager:GetSecretValue"]
       Resource = [
-        aws_secretsmanager_secret.db_password.arn,
         aws_secretsmanager_secret.teleport_license.arn
       ]
     }]
@@ -128,8 +137,10 @@ data "aws_ami" "ubuntu" {
 # ─── Networking ───────────────────────────────────────────────────────────────
 
 resource "aws_vpc" "main" {
-  cidr_block = var.vpc_cidr
-  tags       = { Name = "${var.training_prefix}-vpc1" }
+  cidr_block           = var.vpc_cidr
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+  tags                 = { Name = "${var.training_prefix}-vpc1" }
 }
 
 resource "aws_subnet" "main" {
@@ -289,12 +300,17 @@ locals {
     rm -rf /tmp/awscliv2.zip /tmp/aws
 
     # ── Write environment vars file ──────────────────────────────────────────
+    # DB_SECRET_NAME removed — Teleport authenticates to RDS via IAM token,
+    # not password. The RDS address is still needed for the connection string.
     cat <<EOF > /home/ubuntu/.teleport-env
     export RDS_ADDRESS="${aws_db_instance.teleport.address}"
-    export DB_SECRET_NAME="${aws_secretsmanager_secret.db_password.name}"
     export SESSIONS_BUCKET="${aws_s3_bucket.teleport_sessions.bucket}"
     export LICENSE_SECRET_NAME="${aws_secretsmanager_secret.teleport_license.name}"
     export TELEPORT_OIDC_ROLE_ARN="${var.aws_oidc_role_arn}"
+    export OKTA_METADATA_URL="${var.okta_metadata_url}"
+    export OKTA_GROUPS_EDITOR="${var.okta_groups_editor}"
+    export OKTA_GROUPS_ACCESS="${var.okta_groups_access}"
+    export GITHUB_REPOSITORY="grantvoss-teleport/tam-cert-noeks"
     EOF
     chmod 600 /home/ubuntu/.teleport-env
     chown ubuntu:ubuntu /home/ubuntu/.teleport-env
@@ -311,6 +327,7 @@ locals {
     # ── Pull Ansible roles from GitHub ───────────────────────────────────────
     REPO="${var.github_repo}"
     ANSIBLE_DIR="/home/ubuntu/ansible"
+
     mkdir -p "$ANSIBLE_DIR/roles/k8s-setup/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/k8s-setup/defaults"
     mkdir -p "$ANSIBLE_DIR/roles/k8s-master/tasks"
@@ -319,13 +336,16 @@ locals {
     mkdir -p "$ANSIBLE_DIR/roles/teleport/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/teleport/templates"
     mkdir -p "$ANSIBLE_DIR/roles/teleport-oidc/tasks"
+    mkdir -p "$ANSIBLE_DIR/roles/teleport-sso/tasks"
+    mkdir -p "$ANSIBLE_DIR/roles/teleport-rbac/tasks"
+    mkdir -p "$ANSIBLE_DIR/roles/teleport-rbac/templates"
 
     until curl -fsSL --max-time 5 https://raw.githubusercontent.com > /dev/null 2>&1; do
       echo "Waiting for GitHub to be reachable..."
       sleep 5
     done
 
-    for f in ansible.cfg hosts k8s-setup.yaml k8s-master.yaml k8s-workers.yaml metallb.yaml teleport.yaml teleport-oidc.yaml; do
+    for f in ansible.cfg hosts site.yaml k8s-setup.yaml k8s-master.yaml k8s-workers.yaml metallb.yaml teleport.yaml teleport-oidc.yaml teleport-sso.yaml teleport-rbac.yaml; do
       echo "Fetching ansible/$f..."
       rm -f "$ANSIBLE_DIR/$f"
       curl -fsSL "$REPO/ansible/$f" -o "$ANSIBLE_DIR/$f" || { echo "ERROR: failed to fetch $f"; exit 1; }
@@ -339,7 +359,11 @@ locals {
       "roles/metallb/tasks/main.yaml" \
       "roles/teleport/tasks/main.yaml" \
       "roles/teleport/templates/teleport-values.yaml.j2" \
-      "roles/teleport-oidc/tasks/main.yaml"; do
+      "roles/teleport-oidc/tasks/main.yaml" \
+      "roles/teleport-sso/tasks/main.yaml" \
+      "roles/teleport-rbac/tasks/main.yaml" \
+      "roles/teleport-rbac/templates/machine-id-bot.yaml.j2" \
+      "roles/teleport-rbac/templates/role-rbac-manager.yaml.j2"; do
       echo "Fetching ansible/$role_file..."
       rm -f "$ANSIBLE_DIR/$role_file"
       curl -fsSL "$REPO/ansible/$role_file" -o "$ANSIBLE_DIR/$role_file" || { echo "ERROR: failed to fetch $role_file"; exit 1; }
@@ -349,12 +373,14 @@ locals {
     cp "$ANSIBLE_DIR/ansible.cfg" /home/ubuntu/.ansible.cfg
 
     # ── Run Ansible playbooks ────────────────────────────────────────────────
-    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-setup.yaml"      -i "$ANSIBLE_DIR/hosts" --become
-    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-master.yaml"     -i "$ANSIBLE_DIR/hosts" --become
-    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-workers.yaml"    -i "$ANSIBLE_DIR/hosts" --become
-    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/metallb.yaml"        -i "$ANSIBLE_DIR/hosts" --become
-    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport.yaml"       -i "$ANSIBLE_DIR/hosts" --become
-    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-oidc.yaml"  -i "$ANSIBLE_DIR/hosts" --become
+    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-setup.yaml"     -i "$ANSIBLE_DIR/hosts" --become
+    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-master.yaml"    -i "$ANSIBLE_DIR/hosts" --become
+    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-workers.yaml"   -i "$ANSIBLE_DIR/hosts" --become
+    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/metallb.yaml"       -i "$ANSIBLE_DIR/hosts" --become
+    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport.yaml"      -i "$ANSIBLE_DIR/hosts" --become
+    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-oidc.yaml" -i "$ANSIBLE_DIR/hosts" --become
+    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-sso.yaml"  -i "$ANSIBLE_DIR/hosts" --become
+    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-rbac.yaml" -i "$ANSIBLE_DIR/hosts" --become
   EOT
 
   worker_userdata = <<-EOT

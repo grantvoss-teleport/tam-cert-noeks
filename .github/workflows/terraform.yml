@@ -84,6 +84,9 @@ jobs:
             -var="db_password=${{ secrets.DB_PASSWORD }}" \
             -var="teleport_license=${{ secrets.TELEPORT_LICENSE }}" \
             -var="aws_oidc_role_arn=${{ secrets.AWS_OIDC_ARN }}" \
+            -var="okta_metadata_url=${{ secrets.OKTA_METADATA_URL }}" \
+            -var="okta_groups_editor=${{ secrets.OKTA_GROUPS_EDITOR }}" \
+            -var="okta_groups_access=${{ secrets.OKTA_GROUPS_ACCESS }}" \
             -var="github_repo=https://raw.githubusercontent.com/${{ github.repository }}/main" \
             -out=tfplan \
             -no-color 2>&1 | tee plan_output.txt
@@ -148,6 +151,9 @@ jobs:
             -var="db_password=${{ secrets.DB_PASSWORD }}" \
             -var="teleport_license=${{ secrets.TELEPORT_LICENSE }}" \
             -var="aws_oidc_role_arn=${{ secrets.AWS_OIDC_ARN }}" \
+            -var="okta_metadata_url=${{ secrets.OKTA_METADATA_URL }}" \
+            -var="okta_groups_editor=${{ secrets.OKTA_GROUPS_EDITOR }}" \
+            -var="okta_groups_access=${{ secrets.OKTA_GROUPS_ACCESS }}" \
             -var="github_repo=https://raw.githubusercontent.com/${{ github.repository }}/main"
 
       - name: Output cluster info
@@ -164,12 +170,6 @@ jobs:
           mkdir -p /tmp/keys
           terraform output -raw private_key_pem > /tmp/keys/grant-tam-key.pem
           chmod 600 /tmp/keys/grant-tam-key.pem
-
-      - name: Write Teleport license to file
-        if: |
-          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
-        run: echo "${{ secrets.TELEPORT_LICENSE }}" > /tmp/license.pem
 
       - name: Upload private key artifact
         if: |

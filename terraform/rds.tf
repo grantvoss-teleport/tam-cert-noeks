@@ -33,7 +33,8 @@ resource "aws_s3_bucket_public_access_block" "teleport_sessions" {
   restrict_public_buckets = true
 }
 
-# Grant EC2 instances access to the session recordings bucket
+# ─── S3 session recordings access ────────────────────────────────────────────
+
 resource "aws_iam_role_policy" "s3_sessions" {
   name = "${var.training_prefix}-s3-sessions-policy"
   role = aws_iam_role.ec2.id
@@ -56,6 +57,42 @@ resource "aws_iam_role_policy" "s3_sessions" {
   })
 }
 
+# ─── RDS IAM authentication policy ───────────────────────────────────────────
+# Grants EC2 nodes the ability to obtain IAM auth tokens for RDS.
+# The teleport DB user must have the rds_iam role granted in PostgreSQL.
+# No password is used — authentication is via short-lived IAM tokens only.
+
+resource "aws_iam_role_policy" "rds_iam_auth" {
+  name = "${var.training_prefix}-rds-iam-auth-policy"
+  role = aws_iam_role.ec2.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "RDSConnect"
+        Effect = "Allow"
+        Action = "rds-db:connect"
+        Resource = [
+          # Wildcard covers both teleport_backend and teleport_audit db users
+          "arn:aws:rds-db:us-west-2:*:dbuser:*/*"
+        ]
+      },
+      {
+        Sid    = "RDSDescribe"
+        Effect = "Allow"
+        Action = [
+          "rds:DescribeDBInstances",
+          "rds:ModifyDBInstance"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# ─── Teleport license secret ──────────────────────────────────────────────────
+
 resource "aws_secretsmanager_secret" "teleport_license" {
   name                    = "${var.training_prefix}/teleport/license"
   recovery_window_in_days = 0
@@ -68,22 +105,6 @@ resource "aws_secretsmanager_secret" "teleport_license" {
 resource "aws_secretsmanager_secret_version" "teleport_license" {
   secret_id     = aws_secretsmanager_secret.teleport_license.id
   secret_string = var.teleport_license
-}
-
-# ─── Store DB password in AWS Secrets Manager ────────────────────────────────
-
-resource "aws_secretsmanager_secret" "db_password" {
-  name                    = "${var.training_prefix}/teleport/db-password"
-  recovery_window_in_days = 0
-
-  tags = merge(local.common_tags, {
-    Name = "${var.training_prefix}-teleport-db-password"
-  })
-}
-
-resource "aws_secretsmanager_secret_version" "db_password" {
-  secret_id     = aws_secretsmanager_secret.db_password.id
-  secret_string = var.db_password
 }
 
 # ─── RDS Subnet Group ─────────────────────────────────────────────────────────
@@ -155,25 +176,32 @@ resource "aws_db_parameter_group" "main" {
 }
 
 # ─── RDS PostgreSQL Instance ──────────────────────────────────────────────────
+# IAM database authentication is enabled — no password auth for Teleport.
+# The 'teleport' DB user must be granted the rds_iam role in PostgreSQL
+# (handled by the Ansible teleport role post-install task).
 
 resource "aws_db_instance" "teleport" {
-  identifier              = "grant-tam-pg-1"
-  engine                  = "postgres"
-  engine_version          = "17.6"
-  instance_class          = "db.t3.medium"
-  allocated_storage       = 20
-  max_allocated_storage   = 100
-  storage_type            = "gp3"
-  storage_encrypted       = true
+  identifier            = "${var.training_prefix}-pg-1"
+  engine                = "postgres"
+  engine_version        = "17.6"
+  instance_class        = "db.t3.medium"
+  allocated_storage     = 20
+  max_allocated_storage = 100
+  storage_type          = "gp3"
+  storage_encrypted     = true
 
-  db_name                 = "teleport_backend"
-  username                = "teleport"
-  password                = var.db_password
-  port                    = 5432
+  db_name  = "teleport_backend"
+  username = "teleport_admin"
+  password = var.db_password
+  port     = 5432
 
-  db_subnet_group_name    = aws_db_subnet_group.main.name
-  vpc_security_group_ids  = [aws_security_group.rds.id]
-  parameter_group_name    = aws_db_parameter_group.main.name
+  # Enable IAM authentication — Teleport auth server connects via IAM token,
+  # not password. The master password above is only used for initial DB setup.
+  iam_database_authentication_enabled = true
+
+  db_subnet_group_name   = aws_db_subnet_group.main.name
+  vpc_security_group_ids = [aws_security_group.rds.id]
+  parameter_group_name   = aws_db_parameter_group.main.name
 
   multi_az                = false
   publicly_accessible     = false
@@ -184,7 +212,7 @@ resource "aws_db_instance" "teleport" {
   maintenance_window      = "Mon:04:00-Mon:05:00"
 
   tags = merge(local.common_tags, {
-    Name = "grant-tam-pg-1"
+    Name = "${var.training_prefix}-pg-1"
   })
 }
 

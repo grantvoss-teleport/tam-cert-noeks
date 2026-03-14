@@ -1,4 +1,9 @@
 ---
+# teleport/tasks/main.yaml
+# Installs Teleport Enterprise via Helm using IAM authentication for RDS.
+# No DB password is fetched or stored — the EC2 instance IAM role provides
+# short-lived RDS auth tokens automatically via the AWS SDK credential chain.
+
 - name: Source environment vars file
   ansible.builtin.shell:
     cmd: source /home/ubuntu/.teleport-env && env
@@ -10,23 +15,74 @@
   ansible.builtin.set_fact:
     rds_address: "{{ env_vars.stdout | regex_search('RDS_ADDRESS=(.+)', '\\1') | first }}"
 
-- name: Set DB secret name fact from env file
-  ansible.builtin.set_fact:
-    db_secret_name: "{{ env_vars.stdout | regex_search('DB_SECRET_NAME=(.+)', '\\1') | first }}"
-
 - name: Set sessions bucket fact from env file
   ansible.builtin.set_fact:
     sessions_bucket: "{{ env_vars.stdout | regex_search('SESSIONS_BUCKET=(.+)', '\\1') | first }}"
 
-- name: Fetch DB password from AWS Secrets Manager
+- name: Set license secret name fact from env file
+  ansible.builtin.set_fact:
+    license_secret_name: "{{ env_vars.stdout | regex_search('LICENSE_SECRET_NAME=(.+)', '\\1') | first | default('grant-tam/teleport/license') }}"
+
+- name: Fetch Teleport license from AWS Secrets Manager
   ansible.builtin.command:
-    cmd: aws secretsmanager get-secret-value --secret-id {{ db_secret_name }} --region us-west-2 --query SecretString --output text
-  register: db_secret_result
+    cmd: aws secretsmanager get-secret-value --secret-id {{ license_secret_name }} --region us-west-2 --query SecretString --output text
+  register: license_result
   changed_when: false
 
-- name: Set DB password fact
+- name: Set Teleport license fact
   ansible.builtin.set_fact:
-    db_password: "{{ db_secret_result.stdout }}"
+    teleport_license: "{{ license_result.stdout }}"
+
+# ── RDS IAM user setup ────────────────────────────────────────────────────────
+# Creates the 'teleport' PostgreSQL user with the rds_iam role so Teleport
+# can authenticate using IAM tokens instead of a password.
+# Uses the master credentials (teleport_admin) only for this bootstrap step.
+
+- name: Install psql client
+  ansible.builtin.apt:
+    name: postgresql-client
+    state: present
+    update_cache: true
+  become: true
+
+- name: Wait for RDS to be reachable
+  ansible.builtin.wait_for:
+    host: "{{ rds_address }}"
+    port: 5432
+    timeout: 120
+
+- name: Create teleport IAM DB user and grant rds_iam role
+  ansible.builtin.shell:
+    cmd: |
+      PGPASSWORD="{{ db_password }}" psql \
+        "postgresql://teleport_admin@{{ rds_address }}:5432/teleport_backend?sslmode=require" \
+        -c "DO \$\$
+            BEGIN
+              IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'teleport') THEN
+                CREATE USER teleport;
+              END IF;
+            END
+            \$\$;"
+      PGPASSWORD="{{ db_password }}" psql \
+        "postgresql://teleport_admin@{{ rds_address }}:5432/teleport_backend?sslmode=require" \
+        -c "GRANT rds_iam TO teleport;"
+      PGPASSWORD="{{ db_password }}" psql \
+        "postgresql://teleport_admin@{{ rds_address }}:5432/teleport_backend?sslmode=require" \
+        -c "GRANT ALL PRIVILEGES ON DATABASE teleport_backend TO teleport;"
+      # Create audit DB if it doesn't exist and grant access
+      PGPASSWORD="{{ db_password }}" psql \
+        "postgresql://teleport_admin@{{ rds_address }}:5432/postgres?sslmode=require" \
+        -c "SELECT 'CREATE DATABASE teleport_audit' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'teleport_audit')\gexec"
+      PGPASSWORD="{{ db_password }}" psql \
+        "postgresql://teleport_admin@{{ rds_address }}:5432/teleport_audit?sslmode=require" \
+        -c "GRANT ALL PRIVILEGES ON DATABASE teleport_audit TO teleport;"
+    executable: /bin/bash
+  vars:
+    db_password: "{{ lookup('env', 'DB_PASSWORD') }}"
+  no_log: true
+  changed_when: true
+
+# ── Helm install ──────────────────────────────────────────────────────────────
 
 - name: Install Helm
   ansible.builtin.shell:
@@ -52,20 +108,6 @@
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
 
-- name: Set license secret name fact from env file
-  ansible.builtin.set_fact:
-    license_secret_name: "{{ env_vars.stdout | regex_search('LICENSE_SECRET_NAME=(.+)', '\\1') | first | default('grant-tam/teleport/license') }}"
-
-- name: Fetch Teleport license from AWS Secrets Manager
-  ansible.builtin.command:
-    cmd: aws secretsmanager get-secret-value --secret-id {{ license_secret_name }} --region us-west-2 --query SecretString --output text
-  register: license_result
-  changed_when: false
-
-- name: Set Teleport license fact
-  ansible.builtin.set_fact:
-    teleport_license: "{{ license_result.stdout }}"
-
 - name: Create Teleport license secret
   ansible.builtin.shell:
     cmd: |
@@ -77,19 +119,7 @@
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: true
 
-- name: Create PostgreSQL credentials secret
-  ansible.builtin.shell:
-    cmd: |
-      kubectl create secret generic teleport-pg-credentials \
-        --namespace teleport \
-        --from-literal=conn_string="postgresql://teleport:{{ db_password }}@{{ rds_address }}:5432/teleport_backend?sslmode=require&pool_max_conns=20" \
-        --from-literal=audit_uri="postgresql://teleport:{{ db_password }}@{{ rds_address }}:5432/teleport_audit?sslmode=require" \
-        --dry-run=client -o yaml | kubectl apply -f -
-  environment:
-    KUBECONFIG: /home/ubuntu/.kube/config
-  changed_when: true
-
-- name: Template Teleport values file with RDS connection strings
+- name: Template Teleport Helm values
   ansible.builtin.template:
     src: teleport-values.yaml.j2
     dest: /home/ubuntu/teleport-values.yaml

@@ -20,16 +20,16 @@ auth:
         severity: INFO
       storage:
         type: postgresql
-        conn_string: "postgresql://teleport:{{ db_password }}@{{ rds_address }}:5432/teleport_backend?sslmode=require&pool_max_conns=20"
+        # IAM authentication — no password in the connection string.
+        # Teleport uses the EC2 instance IAM role to obtain a short-lived
+        # RDS auth token. The 'teleport' DB user must have rds_iam granted.
+        conn_string: "postgresql://teleport@{{ rds_address }}:5432/teleport_backend?sslmode=require&pool_max_conns=20"
         audit_events_uri:
-          - "postgresql://teleport:{{ db_password }}@{{ rds_address }}:5432/teleport_audit?sslmode=require"
+          - "postgresql://teleport@{{ rds_address }}:5432/teleport_audit?sslmode=require"
         audit_sessions_uri: "s3://{{ sessions_bucket }}/sessions?region=us-west-2"
 
     # ── Authentication ────────────────────────────────────────────────────────
-    # Primary auth is Okta SAML SSO (set as default connector by teleport-sso
-    # role). Local auth is retained for emergency break-glass access only.
-    # second_factor: on  — enforces MFA for local users; SAML users satisfy
-    # MFA via Okta's own MFA policy.
+    # Primary auth is Okta SAML SSO. Local auth retained for break-glass only.
     auth_service:
       authentication:
         type: saml
@@ -40,10 +40,7 @@ auth:
           rp_id: grant-tam-teleport.gvteleport.com
 
       # ── Machine ID ───────────────────────────────────────────────────────────
-      # Enables the GitHub Actions join method so tbot can exchange a GitHub
-      # OIDC JWT for a short-lived Teleport certificate without any static
-      # secrets. The join token resource (rbac-github-bot-token) is created
-      # by the teleport-rbac Ansible bootstrap role and references this config.
+      # Enables the GitHub Actions join method for the RBAC bot.
       tokens:
         - roles: [Bot]
           join_method: github
