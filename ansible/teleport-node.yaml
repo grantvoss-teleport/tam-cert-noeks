@@ -1,0 +1,7 @@
+---
+- name: Create Teleport IAM join token for ssh-node-1
+  hosts: master
+  become: false
+  remote_user: ubuntu
+  roles:
+    - teleport-node

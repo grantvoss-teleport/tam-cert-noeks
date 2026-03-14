@@ -336,13 +336,14 @@ locals {
     mkdir -p "$ANSIBLE_DIR/roles/teleport-sso/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/teleport-rbac/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/teleport-rbac/templates"
+    mkdir -p "$ANSIBLE_DIR/roles/teleport-node/tasks"
 
     until curl -fsSL --max-time 5 https://raw.githubusercontent.com > /dev/null 2>&1; do
       echo "Waiting for GitHub to be reachable..."
       sleep 5
     done
 
-    for f in ansible.cfg hosts site.yaml k8s-setup.yaml k8s-master.yaml k8s-workers.yaml teleport.yaml teleport-oidc.yaml teleport-sso.yaml teleport-rbac.yaml; do
+    for f in ansible.cfg hosts site.yaml k8s-setup.yaml k8s-master.yaml k8s-workers.yaml teleport.yaml teleport-oidc.yaml teleport-sso.yaml teleport-rbac.yaml teleport-node.yaml; do
       echo "Fetching ansible/$f..."
       rm -f "$ANSIBLE_DIR/$f"
       curl -fsSL "$REPO/ansible/$f" -o "$ANSIBLE_DIR/$f" || { echo "ERROR: failed to fetch $f"; exit 1; }
@@ -359,7 +360,8 @@ locals {
       "roles/teleport-sso/tasks/main.yaml" \
       "roles/teleport-rbac/tasks/main.yaml" \
       "roles/teleport-rbac/templates/machine-id-bot.yaml.j2" \
-      "roles/teleport-rbac/templates/role-rbac-manager.yaml.j2"; do
+      "roles/teleport-rbac/templates/role-rbac-manager.yaml.j2" \
+      "roles/teleport-node/tasks/main.yaml"; do
       echo "Fetching ansible/$role_file..."
       rm -f "$ANSIBLE_DIR/$role_file"
       curl -fsSL "$REPO/ansible/$role_file" -o "$ANSIBLE_DIR/$role_file" || { echo "ERROR: failed to fetch $role_file"; exit 1; }
@@ -376,6 +378,7 @@ locals {
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-oidc.yaml" -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-sso.yaml"  -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-rbac.yaml" -i "$ANSIBLE_DIR/hosts" --become
+    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-node.yaml" -i "$ANSIBLE_DIR/hosts" --become
   EOT
 
   worker_userdata = <<-EOT
@@ -431,6 +434,94 @@ locals {
 
     apt_install update
     apt_install install -y apt-transport-https ca-certificates curl gnupg python3
+  EOT
+
+  # ── ssh-node-1 cloud-init ──────────────────────────────────────────────────
+  # Installs the Teleport node agent and configures it to join the cluster
+  # automatically using the AWS IAM join method. No static tokens or secrets.
+  # The node calls sts:GetCallerIdentity; Teleport verifies the signed response
+  # matches the allow rules in the ssh-node-iam-token join token.
+  ssh_node_userdata = <<-EOT
+    #!/bin/bash
+    set -euo pipefail
+    exec > >(tee /var/log/cloud-init-teleport.log) 2>&1
+
+    export DEBIAN_FRONTEND=noninteractive
+
+    # ── Wait for apt lock ────────────────────────────────────────────────────
+    systemctl disable --now unattended-upgrades || true
+    systemctl disable --now apt-daily.timer || true
+    systemctl disable --now apt-daily-upgrade.timer || true
+
+    systemd-run --property="After=apt-daily.service apt-daily-upgrade.service" \
+      --wait /bin/true 2>/dev/null || true
+
+    while fuser /var/lib/dpkg/lock-frontend \
+                /var/lib/apt/lists/lock \
+                /var/lib/dpkg/lock \
+                /var/cache/apt/archives/lock >/dev/null 2>&1; do
+      echo "Waiting for apt lock..."
+      sleep 5
+    done
+
+    dpkg --configure -a || true
+    sleep 5
+
+    apt_install() {
+      for i in 1 2 3 4 5; do
+        apt-get "$@" && return 0
+        echo "apt-get failed (attempt $i), retrying in 15s..."
+        sleep 15
+      done
+      return 1
+    }
+
+    apt_install update
+    apt_install install -y curl
+
+    # ── Install Teleport Enterprise ──────────────────────────────────────────
+    curl -fsSL https://cdn.teleport.dev/install-v18.7.1.sh | bash -s 18.7.1 enterprise
+
+    # ── Write Teleport node config ───────────────────────────────────────────
+    # join_method: iam  — uses sts:GetCallerIdentity, no static token
+    # token:            — must match the join token name created by Ansible
+    # labels:           — 'team' must match Okta group for RBAC scoping
+    cat <<EOF > /etc/teleport.yaml
+    version: v3
+    teleport:
+      nodename: ssh-node-1
+      data_dir: /var/lib/teleport
+      log:
+        output: stderr
+        severity: INFO
+      join_params:
+        method: iam
+        token_name: ssh-node-iam-token
+      proxy_server: grant-tam-teleport.gvteleport.com:443
+
+    auth_service:
+      enabled: false
+
+    proxy_service:
+      enabled: false
+
+    ssh_service:
+      enabled: true
+      labels:
+        team: platform
+        env: demo
+        node: ssh-node-1
+      commands:
+        - name: hostname
+          command: [hostname]
+          period: 1m0s
+    EOF
+
+    # ── Enable and start Teleport ────────────────────────────────────────────
+    systemctl enable teleport
+    systemctl start teleport
+
+    echo "ssh-node-1 Teleport agent started — joining via AWS IAM join method"
   EOT
 }
 

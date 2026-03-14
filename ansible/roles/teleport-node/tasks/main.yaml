@@ -1,0 +1,66 @@
+---
+# teleport-node/tasks/main.yaml
+#
+# Creates the AWS IAM join token in Teleport that allows ssh-node-1 to
+# auto-enroll using the AWS IAM join method.
+#
+# The join token specifies which IAM role ARN is allowed to join —
+# only instances running with the ssh-node IAM role can authenticate.
+# No static token is stored anywhere; the node proves identity via
+# a signed sts:GetCallerIdentity response.
+
+- name: Get Teleport auth pod name
+  ansible.builtin.command:
+    cmd: >
+      kubectl get pod -n teleport -l app.kubernetes.io/component=auth
+      -o jsonpath='{.items[0].metadata.name}'
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: auth_pod
+  changed_when: false
+
+- name: Get AWS account ID
+  ansible.builtin.command:
+    cmd: aws sts get-caller-identity --query Account --output text --region us-west-2
+  register: aws_account_id
+  changed_when: false
+
+- name: Create AWS IAM join token for ssh-node-1
+  ansible.builtin.shell:
+    cmd: |
+      printf 'kind: token
+      version: v2
+      metadata:
+        name: ssh-node-iam-token
+        expires: "3000-01-01T00:00:00Z"
+      spec:
+        roles: [Node]
+        join_method: iam
+        iam:
+          allow:
+            - aws_account: "%s"
+              aws_arn: "arn:aws:sts::%s:assumed-role/grant-tam-ssh-node-role/*"
+      ' "{{ aws_account_id.stdout }}" "{{ aws_account_id.stdout }}" | \
+      kubectl exec -i -n teleport {{ auth_pod.stdout }} -- tctl create -f -
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: token_result
+  failed_when:
+    - token_result.rc != 0
+    - '"already exists" not in token_result.stderr'
+  changed_when: token_result.rc == 0
+
+- name: Verify IAM join token was created
+  ansible.builtin.command:
+    cmd: >
+      kubectl exec -n teleport {{ auth_pod.stdout }}
+      -- tctl tokens ls
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: token_list
+  changed_when: false
+
+- name: Print token list
+  ansible.builtin.debug:
+    msg: "{{ token_list.stdout_lines }}"

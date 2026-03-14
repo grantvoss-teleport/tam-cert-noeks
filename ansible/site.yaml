@@ -7,3 +7,4 @@
 - import_playbook: teleport-sso.yaml    # 6 - Okta SAML connector (bootstrap only)
 - import_playbook: teleport-rbac.yaml   # 7 - Bootstrap: rbac-manager role + Machine ID bot + join token
                                         #     (RBAC roles applied by GitHub Actions workflow, not Ansible)
+- import_playbook: teleport-node.yaml   # 8 - AWS IAM join token for ssh-node-1 auto-enrollment
