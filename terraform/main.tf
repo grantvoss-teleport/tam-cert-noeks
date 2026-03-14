@@ -83,8 +83,7 @@ resource "aws_iam_role_policy" "secrets_manager" {
       Effect   = "Allow"
       Action   = ["secretsmanager:GetSecretValue"]
       Resource = [
-        aws_secretsmanager_secret.teleport_license.arn,
-        aws_secretsmanager_secret.db_password.arn
+        aws_secretsmanager_secret.teleport_license.arn
       ]
     }]
   })
@@ -309,7 +308,6 @@ locals {
     export OKTA_METADATA_URL="${var.okta_metadata_url}"
     export OKTA_GROUPS_EDITOR="${var.okta_groups_editor}"
     export OKTA_GROUPS_ACCESS="${var.okta_groups_access}"
-    export DB_SECRET_NAME="${aws_secretsmanager_secret.db_password.name}"
     export GITHUB_REPOSITORY="grantvoss-teleport/tam-cert-noeks"
     EOF
     chmod 600 /home/ubuntu/.teleport-env
