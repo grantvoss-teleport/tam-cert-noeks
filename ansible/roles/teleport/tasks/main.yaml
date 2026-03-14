@@ -1,8 +1,9 @@
 ---
 # teleport/tasks/main.yaml
 # Installs Teleport Enterprise via Helm using IAM authentication for RDS.
-# No DB password is fetched or stored — the EC2 instance IAM role provides
-# short-lived RDS auth tokens automatically via the AWS SDK credential chain.
+# The EC2 instance IAM role provides short-lived RDS auth tokens for Teleport.
+# The master DB password is fetched from Secrets Manager only for the one-time
+# bootstrap step that creates the teleport IAM DB user.
 
 - name: Source environment vars file
   ansible.builtin.shell:
@@ -11,19 +12,14 @@
   register: env_vars
   changed_when: false
 
-- name: Set RDS address fact from env file
+- name: Set facts from env file
   ansible.builtin.set_fact:
-    rds_address: "{{ env_vars.stdout | regex_search('RDS_ADDRESS=(.+)', '\\1') | first }}"
-
-- name: Set sessions bucket fact from env file
-  ansible.builtin.set_fact:
-    sessions_bucket: "{{ env_vars.stdout | regex_search('SESSIONS_BUCKET=(.+)', '\\1') | first }}"
-
-- name: Set license secret name fact from env file
-  ansible.builtin.set_fact:
+    rds_address:        "{{ env_vars.stdout | regex_search('RDS_ADDRESS=(.+)', '\\1') | first }}"
+    sessions_bucket:    "{{ env_vars.stdout | regex_search('SESSIONS_BUCKET=(.+)', '\\1') | first }}"
     license_secret_name: "{{ env_vars.stdout | regex_search('LICENSE_SECRET_NAME=(.+)', '\\1') | first | default('grant-tam/teleport/license') }}"
+    db_secret_name:     "{{ env_vars.stdout | regex_search('DB_SECRET_NAME=(.+)', '\\1') | first | default('grant-tam/teleport/db-password') }}"
 
-- name: Fetch Teleport license from AWS Secrets Manager
+- name: Fetch Teleport license from Secrets Manager
   ansible.builtin.command:
     cmd: aws secretsmanager get-secret-value --secret-id {{ license_secret_name }} --region us-west-2 --query SecretString --output text
   register: license_result
@@ -33,10 +29,22 @@
   ansible.builtin.set_fact:
     teleport_license: "{{ license_result.stdout }}"
 
-# ── RDS IAM user setup ────────────────────────────────────────────────────────
-# Creates the 'teleport' PostgreSQL user with the rds_iam role so Teleport
-# can authenticate using IAM tokens instead of a password.
-# Uses the master credentials (teleport_admin) only for this bootstrap step.
+# ── RDS IAM user bootstrap ────────────────────────────────────────────────────
+# Fetches the master DB password from Secrets Manager to create the 'teleport'
+# PostgreSQL user and grant it the rds_iam role. After this step the password
+# is no longer needed — Teleport connects via IAM token from this point on.
+
+- name: Fetch master DB password from Secrets Manager
+  ansible.builtin.command:
+    cmd: aws secretsmanager get-secret-value --secret-id {{ db_secret_name }} --region us-west-2 --query SecretString --output text
+  register: db_secret_result
+  changed_when: false
+  no_log: true
+
+- name: Set DB password fact
+  ansible.builtin.set_fact:
+    db_password: "{{ db_secret_result.stdout }}"
+  no_log: true
 
 - name: Install psql client
   ansible.builtin.apt:
@@ -54,6 +62,7 @@
 - name: Create teleport IAM DB user and grant rds_iam role
   ansible.builtin.shell:
     cmd: |
+      # Create teleport user if it doesn't exist
       PGPASSWORD="{{ db_password }}" psql \
         "postgresql://teleport_admin@{{ rds_address }}:5432/teleport_backend?sslmode=require" \
         -c "DO \$\$
@@ -63,13 +72,15 @@
               END IF;
             END
             \$\$;"
+      # Grant IAM auth role
       PGPASSWORD="{{ db_password }}" psql \
         "postgresql://teleport_admin@{{ rds_address }}:5432/teleport_backend?sslmode=require" \
         -c "GRANT rds_iam TO teleport;"
+      # Grant privileges on backend DB
       PGPASSWORD="{{ db_password }}" psql \
         "postgresql://teleport_admin@{{ rds_address }}:5432/teleport_backend?sslmode=require" \
         -c "GRANT ALL PRIVILEGES ON DATABASE teleport_backend TO teleport;"
-      # Create audit DB if it doesn't exist and grant access
+      # Create audit DB if missing and grant access
       PGPASSWORD="{{ db_password }}" psql \
         "postgresql://teleport_admin@{{ rds_address }}:5432/postgres?sslmode=require" \
         -c "SELECT 'CREATE DATABASE teleport_audit' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'teleport_audit')\gexec"
@@ -77,8 +88,6 @@
         "postgresql://teleport_admin@{{ rds_address }}:5432/teleport_audit?sslmode=require" \
         -c "GRANT ALL PRIVILEGES ON DATABASE teleport_audit TO teleport;"
     executable: /bin/bash
-  vars:
-    db_password: "{{ lookup('env', 'DB_PASSWORD') }}"
   no_log: true
   changed_when: true
 

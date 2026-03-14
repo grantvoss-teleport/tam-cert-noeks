@@ -107,6 +107,24 @@ resource "aws_secretsmanager_secret_version" "teleport_license" {
   secret_string = var.teleport_license
 }
 
+
+# ─── DB password secret (bootstrap only) ─────────────────────────────────────
+# Used only by the Ansible teleport role to create the teleport PostgreSQL IAM
+# user. Not used by Teleport itself after bootstrap.
+
+resource "aws_secretsmanager_secret" "db_password" {
+  name                    = "${var.training_prefix}/teleport/db-password"
+  recovery_window_in_days = 0
+  tags = merge(local.common_tags, {
+    Name = "${var.training_prefix}-teleport-db-password"
+  })
+}
+
+resource "aws_secretsmanager_secret_version" "db_password" {
+  secret_id     = aws_secretsmanager_secret.db_password.id
+  secret_string = var.db_password
+}
+
 # ─── RDS Subnet Group ─────────────────────────────────────────────────────────
 
 resource "aws_db_subnet_group" "main" {
