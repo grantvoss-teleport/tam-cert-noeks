@@ -1,10 +1,7 @@
 # ─── Teleport AWS OIDC Integration ───────────────────────────────────────────
 # References existing AWS IAM OIDC provider and role via variables.
 # Both resources are pre-created and managed outside of this Terraform config.
-
-variable "aws_oidc_role_arn" {
-  description = "ARN of the existing IAM role for Teleport AWS OIDC integration"
-}
+# Variable aws_oidc_role_arn is declared in main.tf
 
 # ─── Outputs ──────────────────────────────────────────────────────────────────
 
