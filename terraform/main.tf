@@ -311,7 +311,7 @@ locals {
     psql "postgresql://teleport_admin@$RDS_ADDR:5432/teleport_backend" -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'teleport') THEN CREATE USER teleport; END IF; END \$\$;"
     psql "postgresql://teleport_admin@$RDS_ADDR:5432/teleport_backend" -c "GRANT rds_iam TO teleport;"
     psql "postgresql://teleport_admin@$RDS_ADDR:5432/teleport_backend" -c "GRANT ALL PRIVILEGES ON DATABASE teleport_backend TO teleport;"
-    psql "postgresql://teleport_admin@$RDS_ADDR:5432/postgres" -c "SELECT 'CREATE DATABASE teleport_audit' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'teleport_audit')\gexec"
+    psql "postgresql://teleport_admin@$RDS_ADDR:5432/postgres" -c "CREATE DATABASE teleport_audit" 2>/dev/null || echo "teleport_audit already exists, skipping"
     psql "postgresql://teleport_admin@$RDS_ADDR:5432/teleport_audit" -c "GRANT ALL PRIVILEGES ON DATABASE teleport_audit TO teleport;"
     unset PGPASSWORD
     echo "RDS bootstrap complete — teleport IAM user created"
