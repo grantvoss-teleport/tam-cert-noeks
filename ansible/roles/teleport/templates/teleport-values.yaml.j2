@@ -37,10 +37,9 @@ auth:
         second_factor: "on"
         webauthn:
           rp_id: grant-tam-teleport.gvteleport.com
-      # Enables the GitHub Actions join method for the Machine ID RBAC bot.
-      tokens:
-        - roles: [Bot]
-          join_method: github
+      # Note: the GitHub OIDC join token for Machine ID is created as a
+      # Teleport resource via tctl (teleport-rbac Ansible role), not here.
+      # Static tokens cannot define join methods — those require tctl resources.
 
 proxy:
   teleportConfig:
