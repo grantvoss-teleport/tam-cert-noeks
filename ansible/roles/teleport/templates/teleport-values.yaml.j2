@@ -28,9 +28,8 @@ auth:
           - "postgresql://teleport@{{ rds_address }}:5432/teleport_audit?sslmode=require"
         audit_sessions_uri: "s3://{{ sessions_bucket }}/sessions?region=us-west-2"
 
-    # ── Authentication ────────────────────────────────────────────────────────
-    # Primary auth is Okta SAML SSO. Local auth retained for break-glass only.
     auth_service:
+      # Primary auth is Okta SAML SSO. Local auth retained for break-glass only.
       authentication:
         type: saml
         connector_name: okta
@@ -38,9 +37,7 @@ auth:
         second_factor: "on"
         webauthn:
           rp_id: grant-tam-teleport.gvteleport.com
-
-      # ── Machine ID ───────────────────────────────────────────────────────────
-      # Enables the GitHub Actions join method for the RBAC bot.
+      # Enables the GitHub Actions join method for the Machine ID RBAC bot.
       tokens:
         - roles: [Bot]
           join_method: github
