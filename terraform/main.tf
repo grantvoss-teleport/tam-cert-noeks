@@ -31,10 +31,6 @@ variable "customer_ip"     { default = "136.25.0.29/32" }
 variable "instance_type"   { default = "t3.medium" }
 variable "key_pair_name"   { default = "grant-tam-key" }
 variable "tf_state_bucket" { description = "S3 bucket used for Terraform state" }
-variable "db_password" {
-  description = "Master password for RDS PostgreSQL instance (used only for initial DB setup, not by Teleport)"
-  sensitive   = true
-}
 variable "teleport_license" {
   description = "Teleport Enterprise license file contents"
   sensitive   = true
@@ -293,29 +289,6 @@ locals {
     apt_install update
     apt_install install -y apt-transport-https ca-certificates curl gnupg ansible python3 unzip
 
-    # ── RDS teleport user bootstrap ──────────────────────────────────────────
-    # Runs inside the VPC using the master password injected by Terraform.
-    # Creates the 'teleport' PostgreSQL IAM user and grants rds_iam.
-    # After this block the password is never used again — Teleport uses
-    # IAM tokens via the EC2 instance role for all subsequent connections.
-    apt_install install -y postgresql-client
-    curl -fsSL https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem -o /tmp/rds-ca.pem
-    RDS_ADDR="${aws_db_instance.teleport.address}"
-    export PGPASSWORD='${var.db_password}'
-    export PGSSLROOTCERT=/tmp/rds-ca.pem
-    export PGSSLMODE=require
-    until psql "postgresql://teleport_admin@$RDS_ADDR:5432/teleport_backend" -c "SELECT 1" >/dev/null 2>&1; do
-      echo "Waiting for RDS..."
-      sleep 10
-    done
-    psql "postgresql://teleport_admin@$RDS_ADDR:5432/teleport_backend" -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'teleport') THEN CREATE USER teleport; END IF; END \$\$;"
-    psql "postgresql://teleport_admin@$RDS_ADDR:5432/teleport_backend" -c "GRANT rds_iam TO teleport;"
-    psql "postgresql://teleport_admin@$RDS_ADDR:5432/teleport_backend" -c "GRANT ALL PRIVILEGES ON DATABASE teleport_backend TO teleport;"
-    psql "postgresql://teleport_admin@$RDS_ADDR:5432/postgres" -c "CREATE DATABASE teleport_audit" 2>/dev/null || echo "teleport_audit already exists, skipping"
-    psql "postgresql://teleport_admin@$RDS_ADDR:5432/teleport_audit" -c "GRANT ALL PRIVILEGES ON DATABASE teleport_audit TO teleport;"
-    unset PGPASSWORD
-    echo "RDS bootstrap complete — teleport IAM user created"
-
     # Install AWS CLI v2
     curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
     unzip -q /tmp/awscliv2.zip -d /tmp
@@ -323,7 +296,6 @@ locals {
     rm -rf /tmp/awscliv2.zip /tmp/aws
 
     # ── Write environment vars file ──────────────────────────────────────────
-    printf 'export RDS_ADDRESS=%s\n' "${aws_db_instance.teleport.address}" >> /home/ubuntu/.teleport-env
     printf 'export SESSIONS_BUCKET=%s\n' "${aws_s3_bucket.teleport_sessions.bucket}" >> /home/ubuntu/.teleport-env
     printf 'export LICENSE_SECRET_NAME=%s\n' "${aws_secretsmanager_secret.teleport_license.name}" >> /home/ubuntu/.teleport-env
     printf 'export TELEPORT_OIDC_ROLE_ARN=%s\n' "${var.aws_oidc_role_arn}" >> /home/ubuntu/.teleport-env

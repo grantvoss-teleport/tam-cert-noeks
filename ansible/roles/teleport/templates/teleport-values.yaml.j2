@@ -19,17 +19,16 @@ auth:
         output: stderr
         severity: INFO
       storage:
+        # ── PostgreSQL backend (in-cluster pod) ───────────────────────────────
+        # Connection strings and TLS cert paths will be added here once the
+        # postgres pod config is supplied.
         type: postgresql
-        # IAM authentication — no password in the connection string.
-        # Teleport uses the EC2 instance IAM role to obtain a short-lived
-        # RDS auth token. The 'teleport' DB user must have rds_iam granted.
-        conn_string: "postgresql://teleport@{{ rds_address }}:5432/teleport_backend?sslmode=require&pool_max_conns=20"
+        conn_string: ""
         audit_events_uri:
-          - "postgresql://teleport@{{ rds_address }}:5432/teleport_audit?sslmode=require"
+          - ""
         audit_sessions_uri: "s3://{{ sessions_bucket }}/sessions?region=us-west-2"
 
     auth_service:
-      # Primary auth is Okta SAML SSO. Local auth retained for break-glass only.
       authentication:
         type: saml
         connector_name: okta
@@ -37,9 +36,6 @@ auth:
         second_factor: "on"
         webauthn:
           rp_id: grant-tam-teleport.gvteleport.com
-      # Note: the GitHub OIDC join token for Machine ID is created as a
-      # Teleport resource via tctl (teleport-rbac Ansible role), not here.
-      # Static tokens cannot define join methods — those require tctl resources.
 
 proxy:
   teleportConfig:

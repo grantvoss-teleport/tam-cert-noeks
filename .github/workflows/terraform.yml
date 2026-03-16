@@ -92,7 +92,6 @@ jobs:
             -var="training_prefix=grant-tam" \
             -var="customer_ip=${{ secrets.CUSTOMER_IP }}" \
             -var="tf_state_bucket=${{ secrets.TF_STATE_BUCKET }}" \
-            -var="db_password=${{ secrets.DB_PASSWORD }}" \
             -var="teleport_license=${{ secrets.TELEPORT_LICENSE }}" \
             -var="aws_oidc_role_arn=${{ secrets.AWS_OIDC_ARN }}" \
             -var="okta_metadata_url=${{ secrets.OKTA_METADATA_URL }}" \
@@ -383,7 +382,6 @@ jobs:
             -var="training_prefix=grant-tam" \
             -var="customer_ip=${{ secrets.CUSTOMER_IP }}" \
             -var="tf_state_bucket=${{ secrets.TF_STATE_BUCKET }}" \
-            -var="db_password=${{ secrets.DB_PASSWORD }}" \
             -var="teleport_license=${{ secrets.TELEPORT_LICENSE }}" \
             -var="aws_oidc_role_arn=${{ secrets.AWS_OIDC_ARN }}" \
             -var="okta_metadata_url=${{ secrets.OKTA_METADATA_URL }}" \
