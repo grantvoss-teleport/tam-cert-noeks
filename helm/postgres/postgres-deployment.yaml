@@ -45,10 +45,13 @@ spec:
       containers:
         - name: postgres
           image: ateleport/test:postgres-wal2json-17-1
-          # Do NOT override command/args — use the image entrypoint so that
-          # initdb runs on first boot and PGDATA is properly initialized.
-          # Pass postgres config options via POSTGRES_* env vars and
-          # the -c flags via the standard POSTGRES_INITDB_ARGS / command approach.
+          # args are appended by the official image entrypoint AFTER initdb
+          # so config_file and hba_file are applied to the running server
+          args:
+            - "-c"
+            - "config_file=/etc/postgresql/postgresql.conf"
+            - "-c"
+            - "hba_file=/etc/postgresql/pg_hba.conf"
           ports:
             - containerPort: 5432
           env:
@@ -66,16 +69,6 @@ spec:
                   key: POSTGRES_PASSWORD
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
-            # Tell postgres to use our config file after initdb completes
-            - name: POSTGRES_INITDB_ARGS
-              value: "--auth-host=md5"
-          # Pass config file path as extra postgres args via the entrypoint
-          # The official image appends extra args after the initdb phase
-          args:
-            - "-c"
-            - "config_file=/etc/postgresql/postgresql.conf"
-            - "-c"
-            - "hba_file=/etc/postgresql/pg_hba.conf"
           volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
