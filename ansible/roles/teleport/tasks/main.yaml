@@ -1,8 +1,8 @@
 ---
 # teleport/tasks/main.yaml
-# Installs Teleport Enterprise via Helm using IAM authentication for RDS.
-# The teleport PostgreSQL user and rds_iam grant are handled by Terraform
-# (postgresql provider) during apply — Ansible does not touch the DB at all.
+# Installs Teleport Enterprise via Helm.
+# PostgreSQL backend is provided by an in-cluster postgres pod (see helm/postgres).
+# Connection string and cert paths are templated into teleport-values.yaml.j2.
 
 - name: Source environment vars file
   ansible.builtin.shell:
@@ -13,7 +13,6 @@
 
 - name: Set facts from env file
   ansible.builtin.set_fact:
-    rds_address:         "{{ env_vars.stdout | regex_search('RDS_ADDRESS=(.+)', '\\1') | first }}"
     sessions_bucket:     "{{ env_vars.stdout | regex_search('SESSIONS_BUCKET=(.+)', '\\1') | first }}"
     license_secret_name: "{{ env_vars.stdout | regex_search('LICENSE_SECRET_NAME=(.+)', '\\1') | first | default('grant-tam/teleport/license') }}"
 

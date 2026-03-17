@@ -20,16 +20,14 @@ auth:
         severity: INFO
       storage:
         type: postgresql
-        # IAM authentication — no password in the connection string.
-        # Teleport uses the EC2 instance IAM role to obtain a short-lived
-        # RDS auth token. The 'teleport' DB user must have rds_iam granted.
-        conn_string: "postgresql://teleport@{{ rds_address }}:5432/teleport_backend?sslmode=require&pool_max_conns=20"
+        # In-cluster PostgreSQL pod — cert authentication, no password.
+        # CN of client cert matches PostgreSQL username 'teleport'.
+        # pg_hba.conf enforces: hostssl ... teleport ... cert clientcert=verify-full
+        conn_string: "postgresql://teleport@postgres-service.postgres.svc.cluster.local:5432/teleport_backend?sslmode=verify-full&sslcert=/pg-certs/client.crt&sslkey=/pg-certs/client.key&sslrootcert=/pg-certs/ca.crt&pool_max_conns=20"
         audit_events_uri:
-          - "postgresql://teleport@{{ rds_address }}:5432/teleport_audit?sslmode=require"
+          - "postgresql://teleport@postgres-service.postgres.svc.cluster.local:5432/teleport_audit?sslmode=verify-full&sslcert=/pg-certs/client.crt&sslkey=/pg-certs/client.key&sslrootcert=/pg-certs/ca.crt"
         audit_sessions_uri: "s3://{{ sessions_bucket }}/sessions?region=us-west-2"
 
-    # ── Authentication ────────────────────────────────────────────────────────
-    # Primary auth is Okta SAML SSO. Local auth retained for break-glass only.
     auth_service:
       authentication:
         type: saml
@@ -39,11 +37,17 @@ auth:
         webauthn:
           rp_id: grant-tam-teleport.gvteleport.com
 
-      # ── Machine ID ───────────────────────────────────────────────────────────
-      # Enables the GitHub Actions join method for the RBAC bot.
-      tokens:
-        - roles: [Bot]
-          join_method: github
+  # Mount the client certs Secret (created by postgres Ansible role) into the auth pod
+  extraVolumes:
+    - name: pg-client-certs
+      secret:
+        secretName: teleport-pg-client-certs
+        defaultMode: 0600
+
+  extraVolumeMounts:
+    - name: pg-client-certs
+      mountPath: /pg-certs
+      readOnly: true
 
 proxy:
   teleportConfig:

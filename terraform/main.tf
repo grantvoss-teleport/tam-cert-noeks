@@ -31,10 +31,6 @@ variable "customer_ip"     { default = "136.25.0.29/32" }
 variable "instance_type"   { default = "t3.medium" }
 variable "key_pair_name"   { default = "grant-tam-key" }
 variable "tf_state_bucket" { description = "S3 bucket used for Terraform state" }
-variable "db_password" {
-  description = "Master password for RDS PostgreSQL instance (used only for initial DB setup, not by Teleport)"
-  sensitive   = true
-}
 variable "teleport_license" {
   description = "Teleport Enterprise license file contents"
   sensitive   = true
@@ -293,43 +289,6 @@ locals {
     apt_install update
     apt_install install -y apt-transport-https ca-certificates curl gnupg ansible python3 unzip
 
-    # ── RDS teleport user bootstrap ──────────────────────────────────────────
-    # Runs inside the VPC using the master password injected by Terraform.
-    # Creates the 'teleport' PostgreSQL IAM user and grants rds_iam.
-    # After this block the password is never used again.
-    apt_install install -y postgresql-client
-    curl -fsSL https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem       -o /tmp/rds-ca.pem
-
-    RDS_ADDR="${aws_db_instance.teleport.address}"
-
-    until PGPASSWORD='${var.db_password}' PGSSLROOTCERT=/tmp/rds-ca.pem PGSSLMODE=require       psql "postgresql://teleport_admin@$RDS_ADDR:5432/teleport_backend" -c "SELECT 1"       > /dev/null 2>&1; do
-      echo "Waiting for RDS to be ready..."
-      sleep 10
-    done
-
-    PGPASSWORD='${var.db_password}' PGSSLROOTCERT=/tmp/rds-ca.pem PGSSLMODE=require       psql "postgresql://teleport_admin@$RDS_ADDR:5432/teleport_backend" <<SQLEOF
-    DO \$\$
-    BEGIN
-      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'teleport') THEN
-        CREATE USER teleport;
-      END IF;
-    END
-    \$\$;
-    GRANT rds_iam TO teleport;
-    GRANT ALL PRIVILEGES ON DATABASE teleport_backend TO teleport;
-    SQLEOF
-
-    PGPASSWORD='${var.db_password}' PGSSLROOTCERT=/tmp/rds-ca.pem PGSSLMODE=require       psql "postgresql://teleport_admin@$RDS_ADDR:5432/postgres" <<SQLEOF
-    SELECT 'CREATE DATABASE teleport_audit'
-    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'teleport_audit')\gexec
-    SQLEOF
-
-    PGPASSWORD='${var.db_password}' PGSSLROOTCERT=/tmp/rds-ca.pem PGSSLMODE=require       psql "postgresql://teleport_admin@$RDS_ADDR:5432/teleport_audit" <<SQLEOF
-    GRANT ALL PRIVILEGES ON DATABASE teleport_audit TO teleport;
-    SQLEOF
-
-    echo "RDS bootstrap complete — teleport IAM user created"
-
     # Install AWS CLI v2
     curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
     unzip -q /tmp/awscliv2.zip -d /tmp
@@ -337,16 +296,14 @@ locals {
     rm -rf /tmp/awscliv2.zip /tmp/aws
 
     # ── Write environment vars file ──────────────────────────────────────────
-    cat <<EOF > /home/ubuntu/.teleport-env
-    export RDS_ADDRESS="${aws_db_instance.teleport.address}"
-    export SESSIONS_BUCKET="${aws_s3_bucket.teleport_sessions.bucket}"
-    export LICENSE_SECRET_NAME="${aws_secretsmanager_secret.teleport_license.name}"
-    export TELEPORT_OIDC_ROLE_ARN="${var.aws_oidc_role_arn}"
-    export OKTA_METADATA_URL="${var.okta_metadata_url}"
-    export OKTA_GROUPS_EDITOR="${var.okta_groups_editor}"
-    export OKTA_GROUPS_ACCESS="${var.okta_groups_access}"
-    export GITHUB_REPOSITORY="grantvoss-teleport/tam-cert-noeks"
-    EOF
+    printf 'export SESSIONS_BUCKET=%s\n' "${aws_s3_bucket.teleport_sessions.bucket}" >> /home/ubuntu/.teleport-env
+    printf 'export LICENSE_SECRET_NAME=%s\n' "${aws_secretsmanager_secret.teleport_license.name}" >> /home/ubuntu/.teleport-env
+    printf 'export TELEPORT_OIDC_ROLE_ARN=%s\n' "${var.aws_oidc_role_arn}" >> /home/ubuntu/.teleport-env
+    printf 'export OKTA_METADATA_URL=%s\n' "${var.okta_metadata_url}" >> /home/ubuntu/.teleport-env
+    printf 'export OKTA_GROUPS_EDITOR=%s\n' "${var.okta_groups_editor}" >> /home/ubuntu/.teleport-env
+    printf 'export OKTA_GROUPS_ACCESS=%s\n' "${var.okta_groups_access}" >> /home/ubuntu/.teleport-env
+    printf 'export GITHUB_REPOSITORY=grantvoss-teleport/tam-cert-noeks\n' >> /home/ubuntu/.teleport-env
+    touch /home/ubuntu/.teleport-env
     chmod 600 /home/ubuntu/.teleport-env
     chown ubuntu:ubuntu /home/ubuntu/.teleport-env
     echo "source ~/.teleport-env" >> /home/ubuntu/.bashrc
@@ -374,13 +331,15 @@ locals {
     mkdir -p "$ANSIBLE_DIR/roles/teleport-rbac/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/teleport-rbac/templates"
     mkdir -p "$ANSIBLE_DIR/roles/teleport-node/tasks"
+    mkdir -p "$ANSIBLE_DIR/roles/postgres/tasks"
+    mkdir -p "$ANSIBLE_DIR/roles/postgres/files"
 
     until curl -fsSL --max-time 5 https://raw.githubusercontent.com > /dev/null 2>&1; do
       echo "Waiting for GitHub to be reachable..."
       sleep 5
     done
 
-    for f in ansible.cfg hosts site.yaml k8s-setup.yaml k8s-master.yaml k8s-workers.yaml teleport.yaml teleport-oidc.yaml teleport-sso.yaml teleport-rbac.yaml teleport-node.yaml; do
+    for f in ansible.cfg hosts site.yaml k8s-setup.yaml k8s-master.yaml k8s-workers.yaml postgres.yaml teleport.yaml teleport-oidc.yaml teleport-sso.yaml teleport-rbac.yaml teleport-node.yaml; do
       echo "Fetching ansible/$f..."
       rm -f "$ANSIBLE_DIR/$f"
       curl -fsSL "$REPO/ansible/$f" -o "$ANSIBLE_DIR/$f" || { echo "ERROR: failed to fetch $f"; exit 1; }
@@ -398,7 +357,15 @@ locals {
       "roles/teleport-rbac/tasks/main.yaml" \
       "roles/teleport-rbac/templates/machine-id-bot.yaml.j2" \
       "roles/teleport-rbac/templates/role-rbac-manager.yaml.j2" \
-      "roles/teleport-node/tasks/main.yaml"; do
+      "roles/teleport-node/tasks/main.yaml" \
+      "roles/postgres/tasks/main.yaml" \
+      "roles/postgres/files/namespace.yaml" \
+      "roles/postgres/files/postgres-certs-job.yaml" \
+      "roles/postgres/files/postgres-config.yaml" \
+      "roles/postgres/files/pg-hba-config.yaml" \
+      "roles/postgres/files/init-sql.yaml" \
+      "roles/postgres/files/postgres-deployment.yaml" \
+      "roles/postgres/files/postgres-svc.yaml"; do
       echo "Fetching ansible/$role_file..."
       rm -f "$ANSIBLE_DIR/$role_file"
       curl -fsSL "$REPO/ansible/$role_file" -o "$ANSIBLE_DIR/$role_file" || { echo "ERROR: failed to fetch $role_file"; exit 1; }
@@ -411,6 +378,7 @@ locals {
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-setup.yaml"     -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-master.yaml"    -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/k8s-workers.yaml"   -i "$ANSIBLE_DIR/hosts" --become
+    sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/postgres.yaml"      -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport.yaml"      -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-oidc.yaml" -i "$ANSIBLE_DIR/hosts" --become
     sudo -u ubuntu ansible-playbook "$ANSIBLE_DIR/teleport-sso.yaml"  -i "$ANSIBLE_DIR/hosts" --become
