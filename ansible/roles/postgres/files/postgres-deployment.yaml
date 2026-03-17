@@ -15,6 +15,32 @@ spec:
       labels:
         app: postgres
     spec:
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+      initContainers:
+        # Copy certs from read-only Secret volume and fix permissions
+        # The Secret is mounted read-only, but postgres requires the key
+        # files to be owned by the postgres user (UID 999) and mode 0600.
+        - name: fix-cert-permissions
+          image: busybox
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              cp /certs-ro/ca.crt /certs/ca.crt
+              cp /certs-ro/server.crt /certs/server.crt
+              cp /certs-ro/server.key /certs/server.key
+              chmod 600 /certs/server.key /certs/ca.crt /certs/server.crt
+              chown 999:999 /certs/server.key /certs/ca.crt /certs/server.crt
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - name: certs-ro
+              mountPath: /certs-ro
+              readOnly: true
+            - name: certs-rw
+              mountPath: /certs
       containers:
         - name: postgres
           image: ateleport/test:postgres-wal2json-17-1
@@ -44,9 +70,8 @@ spec:
           volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
-            - name: certs
+            - name: certs-rw
               mountPath: /certs
-              readOnly: true
             - name: postgres-config
               mountPath: /etc/postgresql/postgresql.conf
               subPath: postgresql.conf
@@ -70,10 +95,11 @@ spec:
       volumes:
         - name: postgres-data
           emptyDir: {}
-        - name: certs
+        - name: certs-ro
           secret:
             secretName: postgres-certs
-            defaultMode: 0600
+        - name: certs-rw
+          emptyDir: {}
         - name: postgres-config
           configMap:
             name: postgres-config
