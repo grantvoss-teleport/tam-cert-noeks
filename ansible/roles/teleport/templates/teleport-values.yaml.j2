@@ -12,6 +12,30 @@ acmeEmail: grant.voss@goteleport.com
 
 proxyListenerMode: multiplex
 
+# ── Authentication ─────────────────────────────────────────────────────────────
+# Top-level authentication block — used by the Helm chart to set auth_service config.
+# Avoids the second_factor / second_factors conflict in Teleport 18.x.
+authentication:
+  type: saml
+  connectorName: okta
+  localAuth: true
+  secondFactors:
+    - otp
+    - webauthn
+  webauthn:
+    rpID: grant-tam-teleport.gvteleport.com
+
+# ── Service (proxy NodePort) ───────────────────────────────────────────────────
+# Top-level service key controls the proxy service NodePort.
+# The NLB target group forwards port 443 → NodePort 32443.
+# healthCheckNodePort 32444 returns 200 only on the node running the proxy pod
+# (externalTrafficPolicy: Local), telling the NLB which node is active.
+service:
+  type: NodePort
+  nodePort: 32443
+  externalTrafficPolicy: Local
+
+# ── Auth service config ────────────────────────────────────────────────────────
 auth:
   teleportConfig:
     teleport:
@@ -27,17 +51,6 @@ auth:
         audit_events_uri:
           - "postgresql://teleport@postgres-service.postgres.svc.cluster.local:5432/teleport_audit?sslmode=verify-full&sslcert=/pg-certs/client.crt&sslkey=/pg-certs/client.key&sslrootcert=/pg-certs/ca.crt"
         audit_sessions_uri: "s3://{{ sessions_bucket }}/sessions?region=us-west-2"
-
-    auth_service:
-      authentication:
-        type: saml
-        connector_name: okta
-        local_auth: true
-        second_factors:
-          - otp
-          - webauthn
-        webauthn:
-          rp_id: grant-tam-teleport.gvteleport.com
 
   # Mount the client certs Secret into the auth pod
   extraVolumes:
@@ -59,22 +72,6 @@ proxy:
         severity: INFO
     proxy_service:
       https_keypairs_reload_interval: 12h
-
-  # Pin the proxy service NodePort to 32443 and healthCheckNodePort to 32444.
-  # The NLB target group forwards port 443 → NodePort 32443.
-  # healthCheckNodePort 32444 returns 200 only on the node running the proxy pod
-  # (externalTrafficPolicy: Local), which tells the NLB which node to use.
-  service:
-    type: NodePort
-    spec:
-      externalTrafficPolicy: Local
-      healthCheckNodePort: 32444
-    ports:
-      - name: tls
-        port: 443
-        targetPort: 3080
-        protocol: TCP
-        nodePort: 32443
 
 highAvailability:
   replicaCount: 1
