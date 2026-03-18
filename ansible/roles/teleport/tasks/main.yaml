@@ -2,7 +2,8 @@
 # teleport/tasks/main.yaml
 # Installs Teleport Enterprise via Helm.
 # PostgreSQL backend is provided by an in-cluster postgres pod (see helm/postgres).
-# Connection string and cert paths are templated into teleport-values.yaml.j2.
+# NodePort 32443 and healthCheckNodePort 32444 are pinned in the Helm values
+# under proxy.service — no kubectl patch needed.
 
 - name: Source environment vars file
   ansible.builtin.shell:
@@ -92,26 +93,19 @@
   changed_when: false
   ignore_errors: true
 
-- name: Pin Teleport NodePort to 32443
+- name: Verify proxy service NodePort is 32443
   ansible.builtin.command:
     cmd: >
-      kubectl patch svc teleport -n teleport
-      --type='json'
-      -p='[{"op":"replace","path":"/spec/ports/0/nodePort","value":32443}]'
+      kubectl get svc teleport -n teleport
+      -o jsonpath='{.spec.ports[?(@.name=="tls")].nodePort}'
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
-  changed_when: true
-  ignore_errors: true
+  register: nodeport_check
+  changed_when: false
 
-- name: Pin Teleport healthCheckNodePort to 32444
-  ansible.builtin.command:
-    cmd: >
-      kubectl patch svc teleport -n teleport
-      -p='{"spec":{"healthCheckNodePort":32444}}'
-  environment:
-    KUBECONFIG: /home/ubuntu/.kube/config
-  changed_when: true
-  ignore_errors: true
+- name: Print NodePort assignment
+  ansible.builtin.debug:
+    msg: "Teleport proxy NodePort: {{ nodeport_check.stdout }} (expected: 32443)"
 
 - name: Get Teleport pod status
   ansible.builtin.command:

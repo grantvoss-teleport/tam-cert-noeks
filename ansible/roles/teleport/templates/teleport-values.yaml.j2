@@ -33,15 +33,13 @@ auth:
         type: saml
         connector_name: okta
         local_auth: true
-        # Use second_factors (plural) — Teleport 18.x deprecates second_factor
-        # Setting both causes a conflict error on startup
         second_factors:
           - otp
           - webauthn
         webauthn:
           rp_id: grant-tam-teleport.gvteleport.com
 
-  # Mount the client certs Secret (created by postgres Ansible role) into the auth pod
+  # Mount the client certs Secret into the auth pod
   extraVolumes:
     - name: pg-client-certs
       secret:
@@ -62,22 +60,22 @@ proxy:
     proxy_service:
       https_keypairs_reload_interval: 12h
 
+  # Pin the proxy service NodePort to 32443 and healthCheckNodePort to 32444.
+  # The NLB target group forwards port 443 → NodePort 32443.
+  # healthCheckNodePort 32444 returns 200 only on the node running the proxy pod
+  # (externalTrafficPolicy: Local), which tells the NLB which node to use.
+  service:
+    type: NodePort
+    spec:
+      externalTrafficPolicy: Local
+      healthCheckNodePort: 32444
+    ports:
+      - name: tls
+        port: 443
+        targetPort: 3080
+        protocol: TCP
+        nodePort: 32443
+
 highAvailability:
   replicaCount: 1
   requireAntiAffinity: false
-
-service:
-  spec:
-    externalTrafficPolicy: Local
-    allocateLoadBalancerNodePorts: true
-    healthCheckNodePort: 32444
-  ports:
-    - name: tls
-      port: 443
-      targetPort: 3080
-      protocol: TCP
-      nodePort: 32443
-    - name: diag
-      port: 3000
-      targetPort: 3000
-      protocol: TCP
