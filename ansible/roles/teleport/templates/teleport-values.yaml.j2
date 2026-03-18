@@ -23,13 +23,12 @@ authentication:
   webauthn:
     rpID: grant-tam-teleport.gvteleport.com
 
-# ── Service (proxy NodePort) ───────────────────────────────────────────────────
-# Pin the proxy service to NodePort 32443.
-# The NLB target group forwards port 443 → NodePort 32443.
-# Health check hits NodePort 32443 directly via /healthz (TCP).
+# ── Service ────────────────────────────────────────────────────────────────────
+# The Helm chart does not support pinning nodePort via values (known limitation).
+# NodePort 32443 is pinned via kubectl patch in the Ansible teleport role
+# after helm install completes.
 service:
   type: NodePort
-  nodePort: 32443
 
 auth:
   teleportConfig:

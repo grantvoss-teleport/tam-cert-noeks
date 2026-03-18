@@ -1,9 +1,5 @@
 ---
 # teleport/tasks/main.yaml
-# Installs Teleport Enterprise via Helm.
-# PostgreSQL backend is provided by an in-cluster postgres pod (see helm/postgres).
-# NodePort 32443 and healthCheckNodePort 32444 are pinned in the Helm values
-# under proxy.service — no kubectl patch needed.
 
 - name: Source environment vars file
   ansible.builtin.shell:
@@ -26,8 +22,6 @@
 - name: Set Teleport license fact
   ansible.builtin.set_fact:
     teleport_license: "{{ license_result.stdout }}"
-
-# ── Helm install ──────────────────────────────────────────────────────────────
 
 - name: Install Helm
   ansible.builtin.shell:
@@ -93,7 +87,43 @@
   changed_when: false
   ignore_errors: true
 
-- name: Verify proxy service NodePort is 32443
+# ── Pin NodePort to 32443 ─────────────────────────────────────────────────────
+# The Teleport Helm chart does not support setting a specific nodePort value
+# via values (known upstream limitation — port is hardcoded as 443 in template).
+# We use a strategic merge patch that finds the tls port entry by name and sets
+# its nodePort explicitly. This survives helm upgrade as long as the service
+# spec does not change type.
+
+- name: Install jq
+  ansible.builtin.apt:
+    name: jq
+    state: present
+    update_cache: false
+  become: true
+
+- name: Get current tls port index in service
+  ansible.builtin.shell:
+    cmd: |
+      kubectl get svc teleport -n teleport -o json | \
+        jq '[.spec.ports[] | .name] | index("tls")'
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: tls_port_index
+  changed_when: false
+
+- name: Pin tls NodePort to 32443
+  ansible.builtin.shell:
+    cmd: |
+      kubectl patch svc teleport -n teleport \
+        --type='json' \
+        -p="[{\"op\":\"replace\",\"path\":\"/spec/ports/{{ tls_port_index.stdout }}/nodePort\",\"value\":32443}]"
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Verify NodePort is 32443
   ansible.builtin.command:
     cmd: >
       kubectl get svc teleport -n teleport
