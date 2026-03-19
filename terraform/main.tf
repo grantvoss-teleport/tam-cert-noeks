@@ -533,6 +533,12 @@ resource "aws_instance" "master" {
   private_ip             = var.master_ip
   iam_instance_profile   = aws_iam_instance_profile.ec2.name
   user_data              = local.master_userdata
+  root_block_device {
+    volume_type = "gp3"
+    volume_size = 80
+    encrypted   = true
+  }
+
 
   tags = merge(local.common_tags, {
     Name = "${var.training_prefix}-master"
@@ -553,6 +559,18 @@ resource "aws_instance" "node1" {
   private_ip             = var.node1_ip
   iam_instance_profile   = aws_iam_instance_profile.ec2.name
   user_data              = local.worker_userdata
+  root_block_device {
+    volume_type = "gp3"
+    volume_size = 80
+    encrypted   = true
+  }
+
+  root_block_device {
+    volume_type = "gp3"
+    volume_size = 80
+    encrypted   = true
+  }
+
 
   tags = merge(local.common_tags, {
     Name = "${var.training_prefix}-node1"
