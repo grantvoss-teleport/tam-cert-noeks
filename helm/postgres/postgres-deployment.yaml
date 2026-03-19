@@ -15,17 +15,45 @@ spec:
       labels:
         app: postgres
     spec:
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+      initContainers:
+        # Copy certs from read-only Secret volume to an emptyDir and fix
+        # permissions — postgres requires server.key to be owned by UID 999
+        # and not world-readable. Runs as root briefly, then drops to 999.
+        - name: fix-cert-permissions
+          image: busybox
+          securityContext:
+            runAsUser: 0
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              cp /certs-ro/ca.crt /certs/ca.crt
+              cp /certs-ro/server.crt /certs/server.crt
+              cp /certs-ro/server.key /certs/server.key
+              chown 999:999 /certs/ca.crt /certs/server.crt /certs/server.key
+              chmod 600 /certs/server.key
+              chmod 644 /certs/ca.crt /certs/server.crt
+          volumeMounts:
+            - name: certs-ro
+              mountPath: /certs-ro
+              readOnly: true
+            - name: certs-rw
+              mountPath: /certs
       containers:
         - name: postgres
           image: ateleport/test:postgres-wal2json-17-1
-          ports:
-            - containerPort: 5432
-          command: ["postgres"]
+          # args are appended by the official image entrypoint AFTER initdb
+          # so config_file and hba_file are applied to the running server
           args:
             - "-c"
             - "config_file=/etc/postgresql/postgresql.conf"
             - "-c"
             - "hba_file=/etc/postgresql/pg_hba.conf"
+          ports:
+            - containerPort: 5432
           env:
             - name: POSTGRES_DB
               value: "postgres"
@@ -44,9 +72,8 @@ spec:
           volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
-            - name: certs
+            - name: certs-rw
               mountPath: /certs
-              readOnly: true
             - name: postgres-config
               mountPath: /etc/postgresql/postgresql.conf
               subPath: postgresql.conf
@@ -59,7 +86,7 @@ spec:
           readinessProbe:
             exec:
               command: ["pg_isready", "-U", "postgres", "-d", "postgres"]
-            initialDelaySeconds: 10
+            initialDelaySeconds: 15
             periodSeconds: 5
             failureThreshold: 12
           livenessProbe:
@@ -70,10 +97,11 @@ spec:
       volumes:
         - name: postgres-data
           emptyDir: {}
-        - name: certs
+        - name: certs-ro
           secret:
             secretName: postgres-certs
-            defaultMode: 0600
+        - name: certs-rw
+          emptyDir: {}
         - name: postgres-config
           configMap:
             name: postgres-config

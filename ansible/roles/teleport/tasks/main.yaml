@@ -1,8 +1,5 @@
 ---
 # teleport/tasks/main.yaml
-# Installs Teleport Enterprise via Helm.
-# PostgreSQL backend is provided by an in-cluster postgres pod (see helm/postgres).
-# Connection string and cert paths are templated into teleport-values.yaml.j2.
 
 - name: Source environment vars file
   ansible.builtin.shell:
@@ -25,8 +22,6 @@
 - name: Set Teleport license fact
   ansible.builtin.set_fact:
     teleport_license: "{{ license_result.stdout }}"
-
-# ── Helm install ──────────────────────────────────────────────────────────────
 
 - name: Install Helm
   ansible.builtin.shell:
@@ -92,26 +87,55 @@
   changed_when: false
   ignore_errors: true
 
-- name: Pin Teleport NodePort to 32443
-  ansible.builtin.command:
-    cmd: >
-      kubectl patch svc teleport -n teleport
-      --type='json'
-      -p='[{"op":"replace","path":"/spec/ports/0/nodePort","value":32443}]'
-  environment:
-    KUBECONFIG: /home/ubuntu/.kube/config
-  changed_when: true
-  ignore_errors: true
+# ── Pin NodePort to 32443 ─────────────────────────────────────────────────────
+# The Teleport Helm chart does not support setting a specific nodePort value
+# via values (known upstream limitation — port is hardcoded as 443 in template).
+# We use a strategic merge patch that finds the tls port entry by name and sets
+# its nodePort explicitly. This survives helm upgrade as long as the service
+# spec does not change type.
 
-- name: Pin Teleport healthCheckNodePort to 32444
-  ansible.builtin.command:
-    cmd: >
-      kubectl patch svc teleport -n teleport
-      -p='{"spec":{"healthCheckNodePort":32444}}'
+- name: Install jq
+  ansible.builtin.apt:
+    name: jq
+    state: present
+    update_cache: false
+  become: true
+
+- name: Get current tls port index in service
+  ansible.builtin.shell:
+    cmd: |
+      kubectl get svc teleport -n teleport -o json | \
+        jq '[.spec.ports[] | .name] | index("tls")'
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: tls_port_index
+  changed_when: false
+
+- name: Pin tls NodePort to 32443
+  ansible.builtin.shell:
+    cmd: |
+      kubectl patch svc teleport -n teleport \
+        --type='json' \
+        -p="[{\"op\":\"replace\",\"path\":\"/spec/ports/{{ tls_port_index.stdout }}/nodePort\",\"value\":32443}]"
+    executable: /bin/bash
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: true
-  ignore_errors: true
+
+- name: Verify NodePort is 32443
+  ansible.builtin.command:
+    cmd: >
+      kubectl get svc teleport -n teleport
+      -o jsonpath='{.spec.ports[?(@.name=="tls")].nodePort}'
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: nodeport_check
+  changed_when: false
+
+- name: Print NodePort assignment
+  ansible.builtin.debug:
+    msg: "Teleport proxy NodePort: {{ nodeport_check.stdout }} (expected: 32443)"
 
 - name: Get Teleport pod status
   ansible.builtin.command:

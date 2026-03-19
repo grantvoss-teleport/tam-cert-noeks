@@ -12,6 +12,24 @@ acmeEmail: grant.voss@goteleport.com
 
 proxyListenerMode: multiplex
 
+# ── Authentication ─────────────────────────────────────────────────────────────
+authentication:
+  type: saml
+  connectorName: okta
+  localAuth: true
+  secondFactors:
+    - otp
+    - webauthn
+  webauthn:
+    rpID: grant-tam-teleport.gvteleport.com
+
+# ── Service ────────────────────────────────────────────────────────────────────
+# The Helm chart does not support pinning nodePort via values (known limitation).
+# NodePort 32443 is pinned via kubectl patch in the Ansible teleport role
+# after helm install completes.
+service:
+  type: NodePort
+
 auth:
   teleportConfig:
     teleport:
@@ -20,24 +38,11 @@ auth:
         severity: INFO
       storage:
         type: postgresql
-        # In-cluster PostgreSQL pod — cert authentication, no password.
-        # CN of client cert matches PostgreSQL username 'teleport'.
-        # pg_hba.conf enforces: hostssl ... teleport ... cert clientcert=verify-full
         conn_string: "postgresql://teleport@postgres-service.postgres.svc.cluster.local:5432/teleport_backend?sslmode=verify-full&sslcert=/pg-certs/client.crt&sslkey=/pg-certs/client.key&sslrootcert=/pg-certs/ca.crt&pool_max_conns=20"
         audit_events_uri:
           - "postgresql://teleport@postgres-service.postgres.svc.cluster.local:5432/teleport_audit?sslmode=verify-full&sslcert=/pg-certs/client.crt&sslkey=/pg-certs/client.key&sslrootcert=/pg-certs/ca.crt"
         audit_sessions_uri: "s3://{{ sessions_bucket }}/sessions?region=us-west-2"
 
-    auth_service:
-      authentication:
-        type: saml
-        connector_name: okta
-        local_auth: true
-        second_factor: "on"
-        webauthn:
-          rp_id: grant-tam-teleport.gvteleport.com
-
-  # Mount the client certs Secret (created by postgres Ansible role) into the auth pod
   extraVolumes:
     - name: pg-client-certs
       secret:
@@ -61,19 +66,3 @@ proxy:
 highAvailability:
   replicaCount: 1
   requireAntiAffinity: false
-
-service:
-  spec:
-    externalTrafficPolicy: Local
-    allocateLoadBalancerNodePorts: true
-    healthCheckNodePort: 32444
-  ports:
-    - name: tls
-      port: 443
-      targetPort: 3080
-      protocol: TCP
-      nodePort: 32443
-    - name: diag
-      port: 3000
-      targetPort: 3000
-      protocol: TCP
