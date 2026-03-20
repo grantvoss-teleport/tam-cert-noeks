@@ -38,9 +38,9 @@ auth:
         severity: INFO
       storage:
         type: postgresql
-        conn_string: "postgresql://teleport@postgres-service.postgres.svc.cluster.local:5432/teleport_backend?sslmode=verify-full&sslcert=/pg-certs/client.crt&sslkey=/pg-certs/client.key&sslrootcert=/pg-certs/ca.crt&pool_max_conns=20"
+        conn_string: "postgresql://teleport@postgres-service.postgres.svc.cluster.local:5432/teleport_backend?sslmode=verify-full&sslcert=/pg-certs/client.crt&sslkey=/pg-certs/client.key&sslrootcert=/pg-certs/ca.crt&pool_max_conns=10"
         audit_events_uri:
-          - "postgresql://teleport@postgres-service.postgres.svc.cluster.local:5432/teleport_audit?sslmode=verify-full&sslcert=/pg-certs/client.crt&sslkey=/pg-certs/client.key&sslrootcert=/pg-certs/ca.crt"
+          - "postgresql://teleport@postgres-service.postgres.svc.cluster.local:5432/teleport_audit?sslmode=verify-full&sslcert=/pg-certs/client.crt&sslkey=/pg-certs/client.key&sslrootcert=/pg-certs/ca.crt&pool_max_conns=10"
         audit_sessions_uri: "s3://{{ sessions_bucket }}/sessions?region=us-west-2"
 
   extraVolumes:

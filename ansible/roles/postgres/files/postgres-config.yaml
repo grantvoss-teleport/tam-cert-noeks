@@ -7,7 +7,8 @@ data:
   postgresql.conf: |
     listen_addresses = '*'
     port = 5432
-    max_connections = 20
+    max_connections = 100
+    superuser_reserved_connections = 3
     shared_buffers = 128MB
     temp_buffers = 8MB
     work_mem = 4MB
