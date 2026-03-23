@@ -3,6 +3,10 @@
   hosts: master
   become: false
   remote_user: ubuntu
+  # access_graph_db_password is passed via the ACCESS_GRAPH_DB_PASSWORD env var
+  # (sourced from .teleport-env before ansible-playbook runs in cloud-init).
+  # The role stores it directly into a k8s secret and never holds it in an
+  # Ansible variable beyond what is needed for the initial secret creation.
   vars:
     access_graph_db_password: "{{ lookup('env', 'ACCESS_GRAPH_DB_PASSWORD') | default('changeme-replace-in-production', true) }}"
   roles:
