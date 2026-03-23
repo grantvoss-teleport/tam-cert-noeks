@@ -379,7 +379,8 @@ locals {
       "roles/postgres/files/postgres-deployment.yaml" \
       "roles/postgres/files/postgres-svc.yaml" \
       "roles/access-graph/tasks/main.yaml" \
-      "roles/access-graph/templates/tag-values.yaml.j2"; do
+      "roles/access-graph/templates/tag-values.yaml.j2" \
+      "roles/access-graph/templates/teleport-access-graph-patch.yaml.j2"; do
       echo "Fetching ansible/$role_file..."
       rm -f "$ANSIBLE_DIR/$role_file"
       curl -fsSL "$REPO/ansible/$role_file" -o "$ANSIBLE_DIR/$role_file" || { echo "ERROR: failed to fetch $role_file"; exit 1; }
