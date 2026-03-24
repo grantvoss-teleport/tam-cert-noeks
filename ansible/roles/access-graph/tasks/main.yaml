@@ -13,6 +13,21 @@
 #   9. Patch teleport-cluster Helm values with access_graph config + CA volume
 #  10. Helm upgrade teleport-cluster, restart proxy
 
+# ── Helm repo ─────────────────────────────────────────────────────────────────
+# The teleport role adds the helm repo as root (become: yes).
+# This role runs as ubuntu (become: false), so we must add it here too.
+
+- name: Add Teleport Helm repo
+  ansible.builtin.command:
+    cmd: helm repo add teleport https://charts.releases.teleport.dev
+  changed_when: false
+  failed_when: false
+
+- name: Update Helm repos
+  ansible.builtin.command:
+    cmd: helm repo update
+  changed_when: false
+
 # ── Namespace ─────────────────────────────────────────────────────────────────
 
 - name: Create teleport-access-graph namespace
