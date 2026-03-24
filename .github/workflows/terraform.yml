@@ -376,6 +376,10 @@ jobs:
             -backend-config="encrypt=true" \
             -backend-config="dynamodb_table=${{ secrets.TF_LOCK_TABLE }}"
 
+      - name: Force-unlock stale state lock
+        run: terraform force-unlock -force 68c62829-98d5-a7b1-97c6-48d8aee7d82f
+        continue-on-error: true
+
       - name: Terraform Destroy
         run: |
           terraform destroy -auto-approve \
