@@ -266,7 +266,7 @@
     cmd: >
       helm upgrade --install teleport-access-graph teleport/teleport-access-graph
       --namespace teleport-access-graph
-      --version 18.7.1
+      --version 1.29.6
       --values /home/ubuntu/tag-values.yaml
       --wait
       --timeout 5m
