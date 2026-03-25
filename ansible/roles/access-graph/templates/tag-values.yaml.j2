@@ -8,3 +8,7 @@ clusterHostCAs:
   # Teleport host CA — retrieved at deploy time from the cluster webapi
   - |
 {{ teleport_host_ca.content | indent(4, True) }}
+
+# Single replica — lab cluster has limited nodes; chart default of 2 causes
+# --wait timeout when the second pod cannot schedule in time.
+replicaCount: 1
