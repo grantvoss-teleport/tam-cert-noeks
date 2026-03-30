@@ -1,0 +1,7 @@
+---
+- name: Deploy Argo CD and register as Teleport app
+  hosts: master
+  become: false
+  remote_user: ubuntu
+  roles:
+    - argocd
