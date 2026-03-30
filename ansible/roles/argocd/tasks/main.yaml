@@ -1,0 +1,319 @@
+---
+# argocd/tasks/main.yaml
+#
+# Deploys Argo CD to the argocd namespace via Helm and registers it as a
+# Teleport app resource so it's accessible via the Teleport proxy (browser SSO).
+#
+# Sequence:
+#   1. Add argo Helm repo
+#   2. Install argo-cd Helm chart (NodePort 32080, --insecure server)
+#   3. Wait for rollout
+#   4. Patch argocd-server Service to pin NodePort to 32080
+#   5. Retrieve initial admin password
+#   6. Register ArgoCD as a Teleport app via ConfigMap mount + tctl create
+
+# ── Helm repo ─────────────────────────────────────────────────────────────────
+
+- name: Add Argo Helm repo
+  ansible.builtin.command:
+    cmd: helm repo add argo https://argoproj.github.io/argo-helm
+  changed_when: false
+  failed_when: false
+
+- name: Update Helm repos
+  ansible.builtin.command:
+    cmd: helm repo update
+  changed_when: false
+
+# ── Namespace ─────────────────────────────────────────────────────────────────
+
+- name: Create argocd namespace
+  ansible.builtin.command:
+    cmd: kubectl create namespace argocd
+  register: ns_result
+  failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
+  changed_when: ns_result.rc == 0
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+
+# ── Helm install ──────────────────────────────────────────────────────────────
+# Run argocd-server with --insecure so it serves plain HTTP internally.
+# TLS termination is handled by the Teleport proxy when accessed via app access.
+# The service is exposed as NodePort; we pin the port with a patch after install.
+
+- name: Install argo-cd Helm chart
+  ansible.builtin.command:
+    cmd: >
+      helm upgrade --install argocd argo/argo-cd
+      --namespace argocd
+      --set server.extraArgs={--insecure}
+      --set server.service.type=NodePort
+      --wait
+      --timeout 10m
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Wait for argocd-server rollout
+  ansible.builtin.command:
+    cmd: kubectl rollout status deployment/argocd-server -n argocd --timeout=300s
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: false
+
+# ── Pin NodePort to 32080 ─────────────────────────────────────────────────────
+# Helm does not support pinning a specific nodePort value; we patch it after
+# install. Port 32080 is used for the ArgoCD HTTP endpoint.
+
+- name: Get HTTP port index in argocd-server service
+  ansible.builtin.shell:
+    cmd: |
+      kubectl get svc argocd-server -n argocd -o json | \
+        python3 -c "
+      import json, sys
+      d = json.load(sys.stdin)
+      for i, p in enumerate(d['spec']['ports']):
+          if p['name'] == 'http':
+              print(i)
+              break
+      "
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: http_port_index
+  changed_when: false
+
+- name: Pin argocd-server HTTP NodePort to 32080
+  ansible.builtin.shell:
+    cmd: |
+      kubectl patch svc argocd-server -n argocd \
+        --type='json' \
+        -p="[{\"op\":\"replace\",\"path\":\"/spec/ports/{{ http_port_index.stdout }}/nodePort\",\"value\":32080}]"
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Verify NodePort is 32080
+  ansible.builtin.command:
+    cmd: >
+      kubectl get svc argocd-server -n argocd
+      -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}'
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: argocd_nodeport
+  changed_when: false
+
+- name: Print ArgoCD NodePort
+  ansible.builtin.debug:
+    msg: "ArgoCD HTTP NodePort: {{ argocd_nodeport.stdout }} (expected: 32080)"
+
+
+# ── Initial admin password ────────────────────────────────────────────────────
+
+- name: Retrieve ArgoCD initial admin password
+  ansible.builtin.shell:
+    cmd: |
+      kubectl get secret argocd-initial-admin-secret \
+        -n argocd \
+        -o jsonpath='{.data.password}' | base64 -d
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: argocd_admin_password
+  changed_when: false
+
+- name: Print ArgoCD initial admin password
+  ansible.builtin.debug:
+    msg: "ArgoCD initial admin password: {{ argocd_admin_password.stdout }}"
+
+# ── Register ArgoCD as a Teleport app ─────────────────────────────────────────
+# Uses the ConfigMap mount pattern (same as teleport-node role) to avoid
+# kubectl exec -i stdin truncation with distroless containers.
+# The app URI points to the in-cluster argocd-server service (HTTP, --insecure).
+
+- name: Get Teleport auth pod name
+  ansible.builtin.command:
+    cmd: >
+      kubectl get pod -n teleport -l app.kubernetes.io/component=auth
+      -o jsonpath='{.items[0].metadata.name}'
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: auth_pod
+  changed_when: false
+
+- name: Render ArgoCD Teleport app manifest
+  ansible.builtin.template:
+    src: teleport-app-argocd.yaml.j2
+    dest: /tmp/teleport-app-argocd.yaml
+    mode: "0600"
+
+
+- name: Create bootstrap ConfigMap with ArgoCD app manifest
+  ansible.builtin.shell:
+    cmd: |
+      kubectl create configmap argocd-teleport-bootstrap \
+        -n teleport \
+        --from-file=teleport-app-argocd.yaml=/tmp/teleport-app-argocd.yaml \
+        --dry-run=client -o yaml | kubectl apply -f -
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Patch auth deployment to mount ArgoCD app bootstrap ConfigMap
+  ansible.builtin.shell:
+    cmd: |
+      kubectl patch deployment teleport-auth -n teleport --type=json -p='[
+        {
+          "op": "add",
+          "path": "/spec/template/spec/volumes/-",
+          "value": {
+            "name": "argocd-bootstrap",
+            "configMap": {"name": "argocd-teleport-bootstrap"}
+          }
+        },
+        {
+          "op": "add",
+          "path": "/spec/template/spec/containers/0/volumeMounts/-",
+          "value": {
+            "name": "argocd-bootstrap",
+            "mountPath": "/tmp/argocd-bootstrap",
+            "readOnly": true
+          }
+        }
+      ]'
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Wait for auth pod rollout after patch
+  ansible.builtin.command:
+    cmd: kubectl rollout status deployment/teleport-auth -n teleport --timeout=120s
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: false
+
+- name: Get new auth pod name after rollout
+  ansible.builtin.command:
+    cmd: >
+      kubectl get pod -n teleport -l app.kubernetes.io/component=auth
+      -o jsonpath='{.items[0].metadata.name}'
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: auth_pod_new
+  changed_when: false
+
+
+- name: Register ArgoCD app in Teleport via tctl
+  ansible.builtin.command:
+    cmd: >
+      kubectl exec -n teleport {{ auth_pod_new.stdout }} --
+      tctl create -f /tmp/argocd-bootstrap/teleport-app-argocd.yaml
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: tctl_result
+  failed_when:
+    - tctl_result.rc != 0
+    - '"already exists" not in tctl_result.stderr'
+  changed_when: tctl_result.rc == 0
+
+# ── Cleanup ───────────────────────────────────────────────────────────────────
+
+- name: Remove bootstrap volumeMount from auth deployment
+  ansible.builtin.shell:
+    cmd: |
+      IDX=$(kubectl get deployment teleport-auth -n teleport -o json | \
+        python3 -c "
+      import json, sys
+      d = json.load(sys.stdin)
+      mounts = d['spec']['template']['spec']['containers'][0].get('volumeMounts', [])
+      for i, m in enumerate(mounts):
+          if m['name'] == 'argocd-bootstrap':
+              print(i); break
+      ")
+      kubectl patch deployment teleport-auth -n teleport --type=json \
+        -p="[{\"op\":\"remove\",\"path\":\"/spec/template/spec/containers/0/volumeMounts/${IDX}\"}]"
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Remove bootstrap volume from auth deployment
+  ansible.builtin.shell:
+    cmd: |
+      IDX=$(kubectl get deployment teleport-auth -n teleport -o json | \
+        python3 -c "
+      import json, sys
+      d = json.load(sys.stdin)
+      vols = d['spec']['template']['spec'].get('volumes', [])
+      for i, v in enumerate(vols):
+          if v['name'] == 'argocd-bootstrap':
+              print(i); break
+      ")
+      kubectl patch deployment teleport-auth -n teleport --type=json \
+        -p="[{\"op\":\"remove\",\"path\":\"/spec/template/spec/volumes/${IDX}\"}]"
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Wait for auth pod rollout after cleanup
+  ansible.builtin.command:
+    cmd: kubectl rollout status deployment/teleport-auth -n teleport --timeout=120s
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: false
+
+- name: Delete bootstrap ConfigMap
+  ansible.builtin.command:
+    cmd: kubectl delete configmap argocd-teleport-bootstrap -n teleport
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: cm_delete
+  failed_when: cm_delete.rc != 0 and 'not found' not in cm_delete.stderr
+  changed_when: cm_delete.rc == 0
+
+- name: Remove rendered app manifest from master
+  ansible.builtin.file:
+    path: /tmp/teleport-app-argocd.yaml
+    state: absent
+
+# ── Verify ────────────────────────────────────────────────────────────────────
+
+- name: Get final auth pod name
+  ansible.builtin.command:
+    cmd: >
+      kubectl get pod -n teleport -l app.kubernetes.io/component=auth
+      -o jsonpath='{.items[0].metadata.name}'
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: auth_pod_final
+  changed_when: false
+
+- name: Verify ArgoCD app registered in Teleport
+  ansible.builtin.command:
+    cmd: >
+      kubectl exec -n teleport {{ auth_pod_final.stdout }} --
+      tctl get app/argocd
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: app_result
+  changed_when: false
+
+- name: Print ArgoCD app registration
+  ansible.builtin.debug:
+    msg: "{{ app_result.stdout_lines }}"
+
+- name: Print ArgoCD pod status
+  ansible.builtin.command:
+    cmd: kubectl get pods -n argocd
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: argocd_pods
+  changed_when: false
+
+- name: Show ArgoCD pods
+  ansible.builtin.debug:
+    msg: "{{ argocd_pods.stdout_lines }}"

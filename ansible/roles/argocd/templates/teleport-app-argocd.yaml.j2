@@ -1,0 +1,12 @@
+kind: app
+version: v3
+metadata:
+  name: argocd
+  description: "Argo CD - GitOps Continuous Delivery"
+  labels:
+    env: demo
+    team: platform
+spec:
+  uri: http://argocd-server.argocd.svc.cluster.local:80
+  public_addr: argocd.grant-tam-teleport.gvteleport.com
+  insecure_skip_verify: true
