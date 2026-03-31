@@ -213,6 +213,26 @@
 # ── Teleport Host CA ──────────────────────────────────────────────────────────
 # Access Graph needs the Teleport host CA to verify the Auth Service TLS cert.
 
+# Wait for DNS to resolve before fetching the host CA — on fresh deploys the
+# NLB DNS entry may not propagate immediately after terraform apply.
+- name: Wait for Teleport proxy DNS to resolve
+  ansible.builtin.shell:
+    cmd: |
+      for i in $(seq 1 30); do
+        if curl -sf --max-time 5 --insecure \
+          "https://grant-tam-teleport.gvteleport.com/v1/webapi/ping" > /dev/null 2>&1; then
+          echo "Teleport proxy reachable"
+          exit 0
+        fi
+        echo "Attempt $i/30 — waiting for Teleport proxy DNS/readiness..."
+        sleep 10
+      done
+      echo "ERROR: Teleport proxy not reachable after 5 minutes"
+      exit 1
+    executable: /bin/bash
+  changed_when: false
+  retries: 1
+
 - name: Retrieve Teleport host CA certificate
   ansible.builtin.uri:
     url: "https://grant-tam-teleport.gvteleport.com/webapi/auth/export?type=tls-host"

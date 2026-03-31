@@ -16,9 +16,11 @@ acmeURI: "https://acme-staging-v02.api.letsencrypt.org/directory"
 proxyListenerMode: multiplex
 
 # ── Authentication ─────────────────────────────────────────────────────────────
+# Default to local auth at bootstrap — the SAML connector doesn't exist yet.
+# ArgoCD (step 11) applies cluster_auth_preference switching to saml/okta
+# once the connector has been created by teleport-sso (step 8).
 authentication:
-  type: saml
-  connectorName: okta
+  type: local
   localAuth: true
   secondFactors:
     - otp
