@@ -7,11 +7,13 @@ spec:
   allow:
     logins:
       - ubuntu
+      - ec2-user
       - root
     node_labels:
       team: "{{internal.team}}"
     host_sudoers:
       - "ubuntu ALL=(ALL) NOPASSWD: ALL"
+      - "ec2-user ALL=(ALL) NOPASSWD: ALL"
   deny: {}
   options:
     max_session_ttl: 4h

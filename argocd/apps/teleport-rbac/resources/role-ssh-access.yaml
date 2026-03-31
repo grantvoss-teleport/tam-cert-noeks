@@ -7,6 +7,7 @@ spec:
   allow:
     logins:
       - ubuntu
+      - ec2-user
     node_labels:
       team: "{{internal.team}}"
     host_groups: []
