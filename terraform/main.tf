@@ -342,6 +342,7 @@ locals {
     mkdir -p "$ANSIBLE_DIR/roles/teleport-rbac/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/teleport-rbac/templates"
     mkdir -p "$ANSIBLE_DIR/roles/teleport-node/tasks"
+    mkdir -p "$ANSIBLE_DIR/roles/teleport-node/templates"
     mkdir -p "$ANSIBLE_DIR/roles/postgres/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/postgres/files"
     mkdir -p "$ANSIBLE_DIR/roles/access-graph/tasks"
@@ -371,6 +372,7 @@ locals {
       "roles/teleport-rbac/templates/machine-id-bot.yaml.j2" \
       "roles/teleport-rbac/templates/role-rbac-manager.yaml.j2" \
       "roles/teleport-node/tasks/main.yaml" \
+      "roles/teleport-node/templates/ssh-node-iam-token.yaml.j2" \
       "roles/postgres/tasks/main.yaml" \
       "roles/postgres/files/namespace.yaml" \
       "roles/postgres/files/postgres-config.yaml" \
