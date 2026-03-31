@@ -7,7 +7,11 @@ enterprise: true
 persistence:
   enabled: false
 
-acme: false
+acme: true
+acmeEmail: grant.voss@goteleport.com
+# Using Let's Encrypt staging to avoid rate limits during development.
+# Switch acmeURI to "" (or remove it) to use Let's Encrypt production.
+acmeURI: "https://acme-staging-v02.api.letsencrypt.org/directory"
 
 proxyListenerMode: multiplex
 
