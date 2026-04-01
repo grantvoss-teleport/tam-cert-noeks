@@ -355,6 +355,39 @@
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: true
 
+# ── Exclude Teleport-native kinds from ArgoCD resource tracking ───────────────
+# ArgoCD tries to look up live state for every resource kind it discovers.
+# Teleport-native kinds (role, login_rule, etc.) have no K8s API group,
+# causing a "groupVersion shouldn't be empty" ComparisonError that blocks
+# the PostSync Job. Excluding them tells ArgoCD to ignore them entirely.
+
+- name: Patch argocd-cm to exclude Teleport-native resource kinds
+  ansible.builtin.shell:
+    cmd: |
+      kubectl patch configmap argocd-cm -n argocd --type=merge -p '{
+        "data": {
+          "resource.exclusions": "- apiGroups:\n  - \"\"\n  kinds:\n  - role\n  - login_rule\n  - cluster_auth_preference\n  - saml\n  - kube_cluster\n  clusters:\n  - \"*\"\n"
+        }
+      }'
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Restart argocd-application-controller to pick up exclusions
+  ansible.builtin.command:
+    cmd: kubectl rollout restart statefulset/argocd-application-controller -n argocd
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Wait for argocd-application-controller rollout
+  ansible.builtin.command:
+    cmd: kubectl rollout status statefulset/argocd-application-controller -n argocd --timeout=120s
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: false
+
 - name: Wait for teleport-rbac Application to sync
   ansible.builtin.command:
     cmd: >
