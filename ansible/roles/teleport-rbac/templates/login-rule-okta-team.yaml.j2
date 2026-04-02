@@ -9,6 +9,11 @@ spec:
     # Passes through all existing traits unchanged
     logins:
       - external.logins
+    # Preserves groups so SAML attributes_to_roles mapping still works after
+    # the login rule runs (traits_map replaces all traits — groups must be
+    # explicitly forwarded or the connector role mapping has nothing to match).
+    groups:
+      - external.groups
     # Maps the Okta 'groups' attribute directly to internal.team
     # Okta group name must match the target K8s namespace and EC2 node 'team' label exactly.
     # e.g. Okta group 'platform' → internal.team = ['platform']
