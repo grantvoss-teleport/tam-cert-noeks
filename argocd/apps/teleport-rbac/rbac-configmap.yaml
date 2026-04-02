@@ -45,7 +45,8 @@ data:
               approve: 1
               deny: 1
           annotations:
-            reason: '[{"required":true}]'
+            reason:
+              - '[{"required":true}]'
       deny: {}
       options:
         max_session_ttl: 8h
@@ -180,7 +181,8 @@ data:
               approve: 1
               deny: 1
           annotations:
-            reason: '[{"required":true}]'
+            reason:
+              - '[{"required":true}]'
       deny: {}
       options:
         max_session_ttl: 8h

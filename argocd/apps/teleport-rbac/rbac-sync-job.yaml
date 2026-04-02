@@ -112,13 +112,18 @@ spec:
                 role-okta-kube.yaml \
                 role-okta-ssh.yaml \
                 role-okta-ssh-root.yaml \
-                cluster-auth-preference.yaml \
                 kube-cluster-label.yaml; do
                 echo "--- Applying ${f} ---"
                 kubectl exec -n teleport "${AUTH_POD}" -- \
                   tctl create -f "/tmp/rbac-sync/${f}" && echo "${f}: OK" \
                   || echo "${f}: WARN (may already exist)"
               done
+
+              echo "--- Applying cluster-auth-preference.yaml ---"
+              kubectl exec -n teleport "${AUTH_POD}" -- \
+                tctl create --confirm -f "/tmp/rbac-sync/cluster-auth-preference.yaml" \
+                && echo "cluster-auth-preference.yaml: OK" \
+                || echo "cluster-auth-preference.yaml: WARN"
 
               echo "=== RBAC sync complete ==="
               # cleanup() runs automatically via trap EXIT
