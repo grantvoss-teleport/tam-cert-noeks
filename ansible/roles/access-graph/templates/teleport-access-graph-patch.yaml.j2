@@ -9,6 +9,8 @@ auth:
       enabled: true
       endpoint: teleport-access-graph.teleport-access-graph.svc.cluster.local:443
       ca: /var/run/access-graph/ca.pem
+      audit_log:
+        enabled: true
 
   extraVolumes:
     - name: pg-client-certs
