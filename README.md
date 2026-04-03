@@ -1,6 +1,6 @@
 # tam-cert-noeks
 
-Terraform + Ansible automation to deploy a production-ready 3-node Kubernetes cluster on AWS EC2 with Teleport Enterprise 18.7.1, an in-cluster PostgreSQL 17 backend with mutual TLS certificate authentication, and Okta SAML SSO. All infrastructure is provisioned via Terraform, cluster bootstrapping is handled via cloud-init on the master node, and all Kubernetes and Teleport configuration is managed by Ansible roles pulled directly from this repository.
+Terraform + Ansible automation to deploy a production-ready Kubernetes cluster on AWS with Teleport Enterprise 18.7.1, PostgreSQL backend, Okta SAML SSO, ArgoCD GitOps, Teleport Access Graph, and AI-powered session summaries. All infrastructure is provisioned via Terraform, cluster bootstrapping runs via cloud-init on the master node, Teleport RBAC is managed via ArgoCD GitOps, and secrets are handled without any static credentials.
 
 ---
 
@@ -11,30 +11,33 @@ Internet
     │
     ▼
 AWS NLB (grant-tam-teleport.gvteleport.com)
-    │  port 443 → NodePort 32443 (TCP health check on 32443)
+    │  port 443 → NodePort 32443
     ▼
 Kubernetes Nodes (t3.medium × 3, us-west-2a)
-  ├── master  172.49.20.230   control-plane + Teleport auth
-  ├── node1   172.49.20.231   worker
-  └── node2   172.49.20.232   worker
+  ├── master  172.49.20.230   control-plane + Ansible runner
+  ├── worker1 172.49.20.231   K8s worker
+  └── worker2 172.49.20.232   K8s worker
         │
         ├── Namespace: postgres
-        │     └── PostgreSQL 17 pod
-        │           ├── mTLS cert auth (no passwords)
-        │           ├── wal_level=logical (replication slots)
-        │           └── pg_hba.conf: hostssl teleport cert clientcert=verify-full
+        │     └── PostgreSQL 17 (wal2json)
+        │           ├── mTLS cert auth for teleport user
+        │           └── scram-sha-256 for access_graph_user
         │
-        └── Namespace: teleport
-              └── Teleport Enterprise 18.7.1
-                    ├── PostgreSQL backend  ──►  postgres-service.postgres.svc.cluster.local
-                    │                            (sslmode=verify-full + client cert at /pg-certs/)
-                    ├── Session recordings  ──►  S3 (grant-tam-teleport-sessions)
-                    ├── AWS OIDC            ──►  IAM role (grant-tam-oidc-role)
-                    └── SSO                 ──►  Okta SAML
+        ├── Namespace: teleport
+        │     ├── teleport-auth     — PostgreSQL backend, S3 sessions
+        │     └── teleport-proxy    — NodePort 32443, self-signed cert
+        │
+        ├── Namespace: teleport-access-graph
+        │     └── Access Graph 1.29.6 — connected to PostgreSQL
+        │
+        └── Namespace: argocd
+              └── ArgoCD — GitOps controller for Teleport RBAC
+                    └── Application: teleport-rbac
+                          └── PostSync Job: tctl apply all RBAC resources
 
-ssh-node-1 (t2.small, us-west-2a)
-  └── Teleport SSH node, joins via AWS IAM join method (no static tokens)
-      team=platform label → scoped by RBAC ssh-access / ssh-root-access roles
+ssh-node-1 (t2.small, private IP varies)
+  └── Teleport SSH node, AWS IAM join, BPF enhanced session recording
+      team=okta-teleport-users label, cgroup2 mount for BPF
 ```
 
 ---
@@ -43,175 +46,232 @@ ssh-node-1 (t2.small, us-west-2a)
 
 ```
 tam-cert-noeks/
-├── .github/
-│   └── workflows/
-│       └── terraform.yml               # Unified CI/CD: plan + apply (infra + RBAC) + destroy
+├── .github/workflows/terraform.yml     # plan + apply (Terraform only) + destroy
 ├── helm/
-│   ├── teleport-values.yaml            # Reference Teleport Helm values
+│   ├── teleport-values.yaml            # Base Teleport Helm values
 │   └── postgres/                       # In-cluster PostgreSQL manifests
-│       ├── namespace.yaml
-│       ├── postgres-config.yaml        # postgresql.conf (SSL, WAL, connections)
-│       ├── pg-hba-config.yaml          # cert auth for teleport user, md5 for admin
-│       ├── init-sql.yaml               # Creates teleport user + databases on first boot
-│       ├── postgres-deployment.yaml    # Deployment with cert permission initContainer
-│       └── postgres-svc.yaml           # ClusterIP service (postgres-service:5432)
 ├── terraform/
-│   ├── backend.tf                      # S3 remote state
-│   ├── main.tf                         # EC2, VPC, networking, IAM, cloud-init
-│   ├── rds.tf                          # S3 session recordings, license secret
+│   ├── main.tf                         # EC2, VPC, IAM, cloud-init, .teleport-env
+│   ├── rds.tf                          # S3 sessions bucket + IAM policy
 │   ├── nlb.tf                          # AWS NLB → NodePort 32443
 │   ├── route53.tf                      # DNS CNAME records
-│   ├── teleport-oidc.tf                # AWS OIDC integration IAM resources
-│   └── ssh-node.tf                     # ssh-node-1: t2.small, IAM auto-enrollment
+│   ├── teleport-oidc.tf                # AWS OIDC IAM resources
+│   ├── ssh-node.tf                     # ssh-node-1 EC2 + IAM
+│   └── scripts/
+│       └── ssh-node-userdata.sh        # cloud-init: Teleport install + BPF config
+├── argocd/
+│   └── apps/
+│       ├── teleport-rbac-app.yaml      # ArgoCD Application resource
+│       └── teleport-rbac/
+│           ├── rbac-configmap.yaml     # All RBAC YAMLs as ConfigMap data
+│           ├── rbac-sync-job.yaml      # PostSync Job: tctl create -f each file
+│           ├── rbac-syncer-rbac.yaml   # ServiceAccount + ClusterRole for job
+│           ├── login-rule-okta-team.yaml
+│           ├── role-base.yaml
+│           ├── role-auto-approver.yaml
+│           ├── role-okta-base.yaml
+│           ├── role-okta-kube.yaml
+│           ├── role-okta-ssh.yaml
+│           ├── role-okta-ssh-root.yaml
+│           ├── inference-model.yaml    # AI session summary model config
+│           ├── inference-policy.yaml   # AI session summary policy (ssh kind)
+│           └── cluster-auth-preference.yaml
 └── ansible/
-    ├── ansible.cfg
-    ├── hosts                           # master (172.49.20.230), node1/2 (.231/.232)
-    ├── site.yaml                       # Master playbook (all roles in order)
-    ├── k8s-setup.yaml
-    ├── k8s-master.yaml
-    ├── k8s-workers.yaml
-    ├── postgres.yaml                   # In-cluster PostgreSQL deployment
-    ├── teleport.yaml
-    ├── teleport-oidc.yaml
-    ├── teleport-sso.yaml
-    ├── teleport-rbac.yaml
-    ├── teleport-node.yaml
+    ├── site.yaml                       # Master playbook (steps 1-11)
     └── roles/
-        ├── k8s-setup/                  # containerd.io 2.x, kubeadm 1.35.2
-        ├── k8s-master/                 # kubeadm init, Calico CNI v3.29
-        ├── k8s-workers/                # Dynamic kubeadm join
-        ├── postgres/
-        │   ├── tasks/main.yaml         # Cert generation (openssl on master),
-        │   │                           #   Secret creation, Deployment, copies client
-        │   │                           #   certs to teleport namespace
-        │   └── files/                  # All postgres manifests (from helm/postgres/)
-        ├── teleport/
-        │   ├── tasks/main.yaml         # Helm install, license secret,
-        │   │                           #   jq-based NodePort patch to 32443
-        │   └── templates/
-        │       └── teleport-values.yaml.j2
-        ├── teleport-oidc/              # AWS OIDC integration via tctl
-        ├── teleport-sso/               # Okta SAML connector bootstrap via tctl
-        ├── teleport-rbac/              # Machine ID bot + rbac-manager role + GitHub
-        │                               #   OIDC join token + RBAC role templates
-        └── teleport-node/              # AWS IAM join token for ssh-node-1
+        ├── k8s-setup/                  # containerd, kubeadm, kubelet, kubectl
+        ├── k8s-master/                 # kubeadm init, Calico CNI
+        ├── k8s-workers/                # dynamic kubeadm join
+        ├── postgres/                   # cert gen, deployment, pg_hba
+        ├── teleport/                   # Helm install, NodePort 32443
+        ├── access-graph/               # Access Graph Helm + teleport-cluster patch
+        ├── teleport-oidc/              # AWS OIDC via tctl
+        ├── teleport-sso/               # Okta SAML connector bootstrap
+        ├── teleport-rbac/              # Machine ID bot + rbac-manager join token
+        ├── teleport-node/              # IAM join token for ssh-node-1
+        └── argocd/                     # ArgoCD Helm + RBAC GitOps + secrets
 ```
+
+---
+
+## Playbook Sequence (`ansible/site.yaml`)
+
+| Step | Role | Description |
+|---|---|---|
+| 1 | `k8s-setup` | containerd, kubeadm, kubelet, kubectl |
+| 2 | `k8s-master` | kubeadm init, Calico CNI, kubeconfig |
+| 3 | `k8s-workers` | dynamic kubeadm join |
+| 4 | `postgres` | cert gen (openssl), PostgreSQL deployment, pg_hba |
+| 5 | `teleport` | Teleport Enterprise Helm install, NodePort 32443 |
+| 6 | `access-graph` | Access Graph TLS, postgres DB, Helm install, teleport-cluster upgrade |
+| 7 | `teleport-oidc` | AWS OIDC integration resource |
+| 8 | `teleport-sso` | Okta SAML connector bootstrap (built-in roles only) |
+| 9 | `teleport-rbac` | Machine ID bot, rbac-manager role, GitHub OIDC join token |
+| 10 | `teleport-node` | AWS IAM join token for ssh-node-1 |
+| 11 | `argocd` | ArgoCD Helm, RBAC GitOps app, full SAML connector, inference_secret |
+
 
 ---
 
 ## CI/CD Pipeline
 
-Single GitHub Actions workflow (`.github/workflows/terraform.yml`) with three jobs:
+Single GitHub Actions workflow (`.github/workflows/terraform.yml`):
 
-### `plan` — runs on every PR and push to `main`
+### `plan` — runs on every PR and every push to `main`
 - Terraform init, validate, plan
-- Uploads plan artifact keyed by git SHA
-- Posts formatted plan output as a PR comment with status icon
-- Triggers on changes to `terraform/**` or `ansible/**`
+- Uploads plan artifact keyed by git SHA (5-day retention)
+- Posts formatted plan output as a PR comment
 
 ### `apply` — runs on merge to `main`, gated by `production` environment approval
-Two phases in one job:
-1. **Terraform** — downloads plan artifact, applies all infrastructure
-2. **Teleport RBAC** — authenticates via Machine ID (GitHub OIDC → `tbot` → X.509 cert, no static secrets), applies all RBAC resources via `tctl`. Skips gracefully with a warning if the cluster is not yet reachable (e.g. first apply before cloud-init completes).
+- Downloads plan artifact, runs `terraform apply`
+- Uploads SSH key artifact (`grant-tam-key`, 1-day retention)
+- RBAC is handled by ArgoCD automatically — no tbot/tctl in CI
 
-### `destroy` — manual `workflow_dispatch` only, gated by `production` environment approval
+### `destroy` — `workflow_dispatch` only, gated by `production` environment
+
+> **Note:** Deploy PRs use empty commits. The `push` trigger has no `paths` filter so merging any PR to `main` fires the apply job regardless of which files changed.
 
 ---
 
-## Playbook Sequence (cloud-init on master)
+## RBAC — ArgoCD GitOps
 
-| Step | Playbook | Description |
+All Teleport RBAC resources are managed via ArgoCD. On every merge to `main`, ArgoCD detects the diff in `argocd/apps/teleport-rbac/` and runs a PostSync Job that applies resources to the live cluster via `tctl`.
+
+### How it works
+
+```
+Git push to main
+    └── ArgoCD detects diff in argocd/apps/teleport-rbac/
+          └── Sync: applies rbac-configmap.yaml to teleport namespace
+                └── PostSync Job (teleport-rbac-apply)
+                      ├── Patches rbac-sync volume onto teleport-auth pod
+                      ├── kubectl exec -- tctl create -f <each file>
+                      └── Cleanup via trap EXIT (always removes volume)
+```
+
+### Role model
+
+| Role | Granted to | Description |
 |---|---|---|
-| 1 | `k8s-setup.yaml` | containerd.io 2.x, kubeadm/kubelet/kubectl 1.35.2, swap off, sysctl |
-| 2 | `k8s-master.yaml` | kubeadm init, Calico CNI v3.29, kubeconfig |
-| 3 | `k8s-workers.yaml` | Dynamic kubeadm join from master |
-| 4 | `postgres.yaml` | Self-signed CA + server + client cert generation via openssl on master, postgres-certs Secret, admin secret, Deployment, Service, client certs copied to teleport namespace |
-| 5 | `teleport.yaml` | Helm install, license secret, NodePort patched to 32443 via jq |
-| 6 | `teleport-oidc.yaml` | AWS OIDC integration resource via tctl |
-| 7 | `teleport-sso.yaml` | Okta SAML connector bootstrap via tctl |
-| 8 | `teleport-rbac.yaml` | rbac-manager role, Machine ID bot, GitHub OIDC join token |
-| 9 | `teleport-node.yaml` | AWS IAM join token for ssh-node-1 auto-enrollment |
+| `base` | All authenticated users (`*` wildcard) | No standing privileges, can request `okta_*` roles |
+| `okta_base` | `okta-teleport-users` Okta group | No standing privileges, can request `okta_kube/ssh/ssh_root` |
+| `okta_kube` | Via access request | K8s namespace access scoped to `{{internal.team}}` |
+| `okta_ssh` | Via access request (auto-approved) | SSH to team-labeled nodes, no root |
+| `okta_ssh_root` | Via access request (manual approval) | SSH + sudo, 4h TTL |
+| `auto-approver` | Machine ID bot | Auto-approves pure `okta_ssh` requests |
+| `editor` + `access` + `auditor` | `okta-teleport-admins` Okta group | Full admin + session recording visibility |
+
+### SAML connector mappings
+
+| Okta group | Teleport roles |
+|---|---|
+| `*` (everyone) | `base` |
+| `okta-teleport-admins` | `editor`, `access`, `auditor` |
+| `okta-teleport-users` | `okta_base` |
+
+### Login rule (`okta-team-trait`)
+
+Maps Okta SSO attributes to Teleport internal traits. `traits_map` replaces ALL traits so every needed trait must be explicitly listed:
+
+```yaml
+traits_map:
+  logins:   [external.logins]   # SSH logins
+  groups:   [external.groups]   # Preserved for SAML attributes_to_roles matching
+  team:     [external.groups]   # Maps Okta group → internal.team for node/K8s scoping
+```
+
+### Secrets ownership
+
+| Resource | Applied by | Why |
+|---|---|---|
+| `inference_model` + `inference_policy` | ArgoCD PostSync Job | No secrets — safe in repo |
+| `inference_secret` (Skynet API key) | Ansible step 11 (argocd role) | Contains API key — sourced from `SKYNET_API_KEY` GH secret |
+| SAML connector | Ansible step 11 (argocd role) | Contains Okta metadata URL — sourced from `.teleport-env` |
 
 ---
 
 ## PostgreSQL — In-Cluster with mTLS
 
-PostgreSQL runs as a Kubernetes Deployment in the `postgres` namespace using the `ateleport/test:postgres-wal2json-17-1` image (PostgreSQL 17 + wal2json for logical replication).
+PostgreSQL 17 runs in the `postgres` namespace using `ateleport/test:postgres-wal2json-17-1`.
 
-### Certificate authentication
+### Users and auth
 
-The `postgres` Ansible role generates all certificates on the master node using `openssl`:
-
-| Certificate | CN | Purpose |
+| User | Auth method | Used by |
 |---|---|---|
-| CA | `postgres-ca` | Signs all other certs |
-| Server | `postgres-service.postgres.svc.cluster.local` | Used by the postgres pod |
-| Client | `teleport` | Used by Teleport auth pod — CN must match PostgreSQL username |
+| `teleport` | Client certificate (CN=teleport) | Teleport auth service — backend + audit |
+| `access_graph_user` | scram-sha-256 password | Access Graph service |
+| `postgres` | md5 (localhost only) | Admin/bootstrap only |
 
-All certs are stored in the `postgres-certs` Secret in the `postgres` namespace. The client cert/key/CA are copied to `teleport-pg-client-certs` in the `teleport` namespace and mounted at `/pg-certs/` in the Teleport auth pod.
-
-### pg_hba.conf
+### Connection strings
 
 ```
-# Teleport user: client certificate required (CN=teleport)
-hostssl all    teleport all  cert clientcert=verify-full
-# Admin user: password (localhost only, bootstrap/maintenance)
-host    all    postgres 127.0.0.1/32  md5
-# Deny all other connections
-host    all    all      all           reject
-```
-
-### Connection strings (in Teleport Helm values)
-
-```
+# Backend + audit (Teleport auth pod)
 postgresql://teleport@postgres-service.postgres.svc.cluster.local:5432/teleport_backend
-  ?sslmode=verify-full
-  &sslcert=/pg-certs/client.crt
-  &sslkey=/pg-certs/client.key
-  &sslrootcert=/pg-certs/ca.crt
-```
+  ?sslmode=verify-full&sslcert=/pg-certs/client.crt
+  &sslkey=/pg-certs/client.key&sslrootcert=/pg-certs/ca.crt
 
-No passwords anywhere in the data path.
+# Access Graph
+postgresql://access_graph_user:<password>@postgres-service.postgres.svc.cluster.local:5432/access_graph_db
+  ?sslmode=require
+```
 
 ---
 
-## Teleport RBAC
+## Teleport Access Graph
 
-All roles managed as Jinja2 templates in `ansible/roles/teleport-rbac/templates/`, applied by GitHub Actions Machine ID after each merge to `main`.
+Access Graph v1.29.6 runs in the `teleport-access-graph` namespace. It connects to the same in-cluster PostgreSQL instance using password auth over TLS.
 
-| Role | Description |
+The `teleport-cluster` Helm chart is upgraded by Ansible step 6 with an `access_graph` patch:
+
+```yaml
+auth:
+  teleportConfig:
+    access_graph:
+      enabled: true
+      endpoint: teleport-access-graph.teleport-access-graph.svc.cluster.local:443
+      ca: /var/run/access-graph/ca.pem
+```
+
+**Recovery:** If Access Graph shows "Failed to fetch" in the UI, re-run the Helm upgrade on master:
+```bash
+helm upgrade teleport teleport/teleport-cluster \
+  --namespace teleport --version 18.7.1 \
+  --values /home/ubuntu/teleport-values.yaml \
+  --values /home/ubuntu/teleport-access-graph-patch.yaml \
+  --wait --timeout 10m
+```
+
+---
+
+## AI Session Summary
+
+Session summaries are generated using a Skynet-hosted Gemma 3 model via an OpenAI-compatible API.
+
+| Resource | Value |
 |---|---|
-| `base` | Zero standing privilege. Can request `ssh-access` (auto-approved), `kube-access` and `ssh-root-access` (manual approval) |
-| `kube-access` | Kubernetes access scoped to `{{internal.team}}` namespace derived from Okta group |
-| `ssh-access` | SSH to nodes labeled `team={{internal.team}}`, login `ubuntu` only, no root, 8h TTL |
-| `ssh-root-access` | SSH + sudo to team-labeled nodes, 4h TTL |
-| `auto-approver` | Machine ID bot role — auto-approves pure `ssh-access` requests |
-| `rbac-manager` | Machine ID bot role — `tctl` permissions for roles/SAML/login_rule only |
+| `inference_model` | `skynet-gemma` — endpoint `skynet.gvteleport.com:443`, model `gemma3:4b` |
+| `inference_policy` | `skynet-gemma-policy` — applies to `ssh` session kind |
+| `inference_secret` | `grant-skynet-secret` — API key injected from `SKYNET_API_KEY` GH secret |
 
-**Login rule:** Okta `groups` attribute → `internal.team` trait, which drives both K8s namespace scoping and EC2 node label scoping.
-
-**Machine ID flow:**
-```
-GitHub Actions runner
-  └── tbot (ephemeral, credential-ttl: 10m)
-        └── GitHub OIDC JWT → Teleport X.509 cert (via rbac-github-bot-token)
-              └── tctl applies RBAC resources to grant-tam-teleport.gvteleport.com:443
-```
+The `inference_model` and `inference_policy` are applied by ArgoCD. The `inference_secret` is applied by Ansible step 11 using the ConfigMap mount pattern (same as the SAML connector) so the API key never touches the repo.
 
 ---
 
 ## ssh-node-1
 
-A standalone `t2.small` Ubuntu EC2 instance that auto-enrolls into Teleport using the AWS IAM join method — no static tokens, no secrets.
+Standalone `t2.small` Ubuntu node. Auto-enrolls via AWS IAM join — no static tokens.
 
-**How it works:**
-1. Node boots, Teleport agent starts with `join_method: iam`
-2. Agent calls `sts:GetCallerIdentity` using its EC2 instance IAM role
-3. AWS returns a signed response proving the node's identity
-4. Teleport verifies the signature and checks the IAM role ARN matches `ssh-node-iam-token` allow rules
-5. Node appears in `tsh ls` with labels `team=platform`, `env=demo`
+**Labels:** `team=okta-teleport-users`, `env=demo`, `node=ssh-node-1`
 
-Users with the `ssh-access` role whose Okta group maps to `platform` can connect via `tsh ssh ubuntu@ssh-node-1`.
+**BPF enhanced session recording** — captures individual commands and network activity:
+```yaml
+ssh_service:
+  enhanced_recording:
+    enabled: true
+    cgroup_path: /cgroup2   # separate mount, not /sys/fs/cgroup (conflicts with systemd)
+```
+Cloud-init mounts `/cgroup2` and runs `systemctl daemon-reexec` before starting Teleport to avoid `status=219/CGROUP` failures.
+
 
 ---
 
@@ -222,21 +282,18 @@ Users with the `ssh-access` role whose Okta group maps to `platform` can connect
 ```bash
 # S3 bucket for Terraform state
 aws s3api create-bucket \
-  --bucket <your-tf-state-bucket> \
-  --region us-west-2 \
+  --bucket <tf-state-bucket> --region us-west-2 \
   --create-bucket-configuration LocationConstraint=us-west-2
-
 aws s3api put-bucket-versioning \
-  --bucket <your-tf-state-bucket> \
+  --bucket <tf-state-bucket> \
   --versioning-configuration Status=Enabled
 
 # DynamoDB table for state locking
 aws dynamodb create-table \
-  --table-name <your-tf-lock-table> \
+  --table-name <tf-lock-table> \
   --attribute-definitions AttributeName=LockID,AttributeType=S \
   --key-schema AttributeName=LockID,KeyType=HASH \
-  --billing-mode PAY_PER_REQUEST \
-  --region us-west-2
+  --billing-mode PAY_PER_REQUEST --region us-west-2
 ```
 
 ### 2. GitHub Repository Secrets
@@ -248,28 +305,31 @@ aws dynamodb create-table \
 | `AWS_SESSION_TOKEN` | Session token (required for STS/SSO credentials) |
 | `TF_STATE_BUCKET` | S3 bucket name for Terraform remote state |
 | `TF_LOCK_TABLE` | DynamoDB table name for state locking |
-| `CUSTOMER_IP` | Your public IP in CIDR notation (e.g. `136.25.0.29/32`) |
+| `CUSTOMER_IP` | Your public IP in CIDR notation (e.g. `1.2.3.4/32`) |
 | `TELEPORT_LICENSE` | Teleport Enterprise license file contents |
 | `AWS_OIDC_ARN` | ARN of the IAM role for Teleport AWS OIDC integration |
 | `OKTA_METADATA_URL` | SAML metadata URL from Okta app Sign On tab |
-| `OKTA_GROUPS_EDITOR` | Okta group name mapped to Teleport `editor` role |
-| `OKTA_GROUPS_ACCESS` | Okta group name mapped to Teleport `access` role |
-
-> **Note:** `DB_PASSWORD` is no longer required. PostgreSQL uses certificate authentication — no passwords are stored or passed anywhere.
+| `OKTA_GROUPS_EDITOR` | Okta group name for the admin/editor group |
+| `OKTA_GROUPS_ACCESS` | Okta group name for the standard access group |
+| `SKYNET_API_KEY` | API key for the Skynet AI inference endpoint |
 
 ### 3. GitHub Environment
 
 Create a **`production`** environment under **Settings → Environments** with required reviewers to gate all `apply` and `destroy` operations.
 
-### 4. Okta Prerequisites
+### 4. Okta SAML App
 
-Create a SAML 2.0 app in Okta:
-- **Single sign-on URL**: `https://grant-tam-teleport.gvteleport.com/v1/webapi/saml/acs/okta`
+Create a SAML 2.0 application in Okta:
+- **SSO URL**: `https://grant-tam-teleport.gvteleport.com/v1/webapi/saml/acs/okta`
 - **Audience URI**: `https://grant-tam-teleport.gvteleport.com/v1/webapi/saml/acs/okta`
 - **Name ID format**: `EmailAddress`
 - **Attribute**: `username` → `user.login`
 - **Group attribute**: `groups`, filter `Matches regex: .*`
 - Copy the **Metadata URL** from Sign On tab → `OKTA_METADATA_URL` secret
+
+Create two Okta groups and assign users:
+- Admin group → `OKTA_GROUPS_EDITOR` (gets `editor`, `access`, `auditor` roles)
+- Access group → `OKTA_GROUPS_ACCESS` (gets `okta_base` — must request all access)
 
 ---
 
@@ -278,118 +338,114 @@ Create a SAML 2.0 app in Okta:
 ### Via Pull Request (recommended)
 
 ```bash
-git checkout -b your-feature-branch
-# make changes to terraform/ or ansible/
-git add . && git commit -m "your change"
-git push origin your-feature-branch
-# Open PR on GitHub → plan runs automatically and posts output to PR
-# Merge PR → apply job starts, pauses for production environment approval
-# Approve → Terraform applies infrastructure, then RBAC is applied via Machine ID
+git checkout -b deploy/apply-$(date +%Y%m%d)
+git commit --allow-empty -m "chore: fresh deploy $(date +%Y-%m-%d)"
+git push origin deploy/apply-$(date +%Y%m%d)
+gh pr create --title "chore: fresh deploy" --base main
+# Merge PR → apply job starts → approve production gate → infrastructure deploys
+# ArgoCD syncs automatically and applies all RBAC resources via PostSync Job
 ```
 
 ### Manual trigger
 
 **Actions → Deploy - K8s Cluster + Teleport RBAC → Run workflow**
-- `plan` — preview changes only
-- `apply` — apply infrastructure + RBAC (gated by production approval)
-- `destroy` — tear down all resources (gated by production approval)
+- `plan` — preview only
+- `apply` — full deploy (gated by production approval)
+- `destroy` — tear down (gated by production approval)
 
 ---
 
 ## Accessing the Cluster
 
 ```bash
-# Get master public IP
-cd terraform && terraform output master_public_ip
+# Get SSH key from the apply run artifacts (1-day retention)
+gh run download <run-id> --repo grantvoss-teleport/tam-cert-noeks \
+  --name grant-tam-key --dir /tmp/grant-tam-key
+chmod 600 /tmp/grant-tam-key/grant-tam-key.pem
 
-# Download SSH key from Actions → your run → Artifacts → grant-tam-key
-ssh -i grant-tam-key.pem ubuntu@<master_public_ip>
+# Get master public IP from apply run logs
+gh run view <run-id> --log | grep master_public_ip
 
-# Verify K8s cluster
-kubectl get nodes
-kubectl get pods -A
+# SSH to master
+ssh -i /tmp/grant-tam-key/grant-tam-key.pem ubuntu@<master_public_ip>
 
-# Check Teleport status
+# Check cluster
+kubectl get nodes && kubectl get pods -A
+
+# Check Teleport
 kubectl exec -n teleport \
   $(kubectl get pod -n teleport -l app.kubernetes.io/component=auth \
-    -o jsonpath='{.items[0].metadata.name}') \
-  -- tctl status
+    -o jsonpath='{.items[0].metadata.name}') -- tctl status
 
-# Check PostgreSQL
-kubectl exec -n postgres \
-  $(kubectl get pod -n postgres -l app=postgres \
-    -o jsonpath='{.items[0].metadata.name}') \
-  -- pg_isready -U postgres
+# Check ArgoCD sync status
+kubectl get application teleport-rbac -n argocd \
+  -o jsonpath='{.status.sync.status} {.status.health.status}'
 ```
 
 ---
 
-## Teleport Access
+## Common Operations
 
-Teleport is accessible at `https://grant-tam-teleport.gvteleport.com`.
+### Re-apply RBAC after manual changes
 
-### Login
+ArgoCD auto-syncs on every commit to `main`. For immediate re-apply without a code change, trigger via the ArgoCD API from master:
 
-Users authenticate via Okta SAML SSO. Navigate to the URL and click **Login with Okta**.
+```bash
+PASS=$(kubectl get secret argocd-initial-admin-secret -n argocd \
+  -o jsonpath='{.data.password}' | base64 -d)
+TOKEN=$(curl -sk -X POST http://localhost:32080/api/v1/session \
+  -H 'Content-Type: application/json' \
+  -d "{\"username\":\"admin\",\"password\":\"${PASS}\"}" \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['token'])")
+curl -sk -X POST http://localhost:32080/api/v1/applications/teleport-rbac/sync \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H 'Content-Type: application/json' \
+  -d '{"revision":"HEAD","strategy":{"hook":{"force":true}}}'
+```
 
-### Create a local admin user (emergency break-glass)
+### Fix stale ArgoCD volume on teleport-auth
+
+If the ArgoCD PostSync Job crashes mid-run, it leaves a stale `rbac-sync` volume on `teleport-auth`. Remove it:
+
+```bash
+MOUNT_IDX=$(kubectl get deployment teleport-auth -n teleport -o json | \
+  python3 -c "import json,sys; d=json.load(sys.stdin); mounts=d['spec']['template']['spec']['containers'][0].get('volumeMounts',[]); idxs=[str(i) for i,m in enumerate(mounts) if m['name']=='rbac-sync']; print(idxs[0] if idxs else '')")
+VOL_IDX=$(kubectl get deployment teleport-auth -n teleport -o json | \
+  python3 -c "import json,sys; d=json.load(sys.stdin); vols=d['spec']['template']['spec'].get('volumes',[]); idxs=[str(i) for i,v in enumerate(vols) if v['name']=='rbac-sync']; print(idxs[0] if idxs else '')")
+kubectl patch deployment teleport-auth -n teleport --type=json \
+  -p="[{\"op\":\"remove\",\"path\":\"/spec/template/spec/containers/0/volumeMounts/${MOUNT_IDX}\"},{\"op\":\"remove\",\"path\":\"/spec/template/spec/volumes/${VOL_IDX}\"}]"
+kubectl rollout status deployment/teleport-auth -n teleport --timeout=120s
+```
+
+### Fix Access Graph "Failed to fetch"
+
+```bash
+helm upgrade teleport teleport/teleport-cluster \
+  --namespace teleport --version 18.7.1 \
+  --values /home/ubuntu/teleport-values.yaml \
+  --values /home/ubuntu/teleport-access-graph-patch.yaml \
+  --wait --timeout 10m
+```
+
+### Emergency break-glass admin user
 
 ```bash
 kubectl exec -n teleport \
   $(kubectl get pod -n teleport -l app.kubernetes.io/component=auth \
     -o jsonpath='{.items[0].metadata.name}') \
-  -- tctl users add admin --roles=editor,access --logins=ubuntu
-```
-
-### Verify integrations
-
-```bash
-AUTH_POD=$(kubectl get pod -n teleport -l app.kubernetes.io/component=auth \
-  -o jsonpath='{.items[0].metadata.name}')
-
-# AWS OIDC integration
-kubectl exec -n teleport $AUTH_POD -- tctl get integration/grant-tam-teleport-integration
-
-# Okta SAML connector
-kubectl exec -n teleport $AUTH_POD -- tctl get saml/okta
-
-# RBAC roles
-kubectl exec -n teleport $AUTH_POD -- \
-  tctl get roles/base roles/kube-access roles/ssh-access roles/ssh-root-access
-```
-
----
-
-## Tearing Down
-
-### Via GitHub Actions (recommended)
-
-**Actions → Deploy - K8s Cluster + Teleport RBAC → Run workflow → `destroy`**
-
-### Manually
-
-```bash
-cd terraform
-terraform destroy -auto-approve \
-  -var="training_prefix=grant-tam" \
-  -var="customer_ip=136.25.0.29/32" \
-  -var="tf_state_bucket=<your-tf-state-bucket>" \
-  -var="teleport_license=<your-license>" \
-  -var="aws_oidc_role_arn=<your-oidc-role-arn>" \
-  -var="okta_metadata_url=<your-okta-metadata-url>" \
-  -var="okta_groups_editor=<editor-group>" \
-  -var="okta_groups_access=<access-group>"
+  -- tctl users add admin --roles=editor,access,auditor --logins=ubuntu
 ```
 
 ---
 
 ## Notes
 
-- `grant-tam-key.pem` is written to `terraform/` after apply and is listed in `.gitignore` — never commit it
-- Terraform state is stored in S3 with DynamoDB locking — do not use local state in shared environments
-- AWS session tokens expire — refresh `AWS_SESSION_TOKEN` in GitHub Secrets before running if credentials have expired
-- Monitor cloud-init progress on master: `sudo tail -f /var/log/cloud-init-k8s.log`
-- PostgreSQL uses certificate authentication — no passwords stored anywhere in the running system
-- NodePort `32443` is pinned via `kubectl patch` using `jq` to locate the correct port by name — the Teleport Helm chart does not support setting `nodePort` via values
-- Teleport ACME/Let's Encrypt TLS requires DNS to be configured before certificates can be issued
-- The RBAC GitHub Actions workflow skips gracefully if the cluster is not reachable on first apply — re-run after cloud-init completes
+- AWS session tokens expire — refresh `AWS_SESSION_TOKEN` in GitHub Secrets before running
+- Monitor cloud-init: `sudo tail -f /var/log/cloud-init-teleport.log` (on master)
+- The Teleport proxy uses a **self-signed cert** (ACME disabled due to Let's Encrypt rate limits) — use `--insecure` flag for `tsh` and set `insecure: true` in `~/.tsh/config.yaml`
+- NodePort `32443` is pinned via `kubectl patch` — the Teleport Helm chart does not support `nodePort` in values
+- `traits_map` in a login rule **replaces** all traits — every trait needed downstream must be explicitly listed
+- `{{internal.team}}` template variables in `node_labels` do **not** work when the trait is a list. Use `team: '*'` and rely on role access control instead
+- BPF enhanced recording requires `cgroup_path: /cgroup2` (not `/sys/fs/cgroup`) and `systemctl daemon-reexec` after mounting
+- `tctl create` for `cluster_auth_preference` requires `--confirm` when the resource is managed by static config
+- The `auditor` role is required for session recording visibility in the UI — `editor` alone is not sufficient
