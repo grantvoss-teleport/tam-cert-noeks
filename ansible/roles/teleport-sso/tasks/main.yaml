@@ -26,16 +26,73 @@
 # built-in Teleport roles (no custom roles exist yet at this step).
 # The argocd role (step 11) updates this connector after ArgoCD has applied
 # all custom roles, adding the base wildcard and okta_base mappings.
+#
+# Uses ConfigMap mount pattern — kubectl exec -i stdin truncates on distroless.
 
-- name: Create initial Okta SAML connector
+- name: Write bootstrap SAML connector to temp file
+  ansible.builtin.copy:
+    dest: /tmp/saml-okta-bootstrap.yaml
+    mode: "0600"
+    content: |
+      kind: saml
+      version: v2
+      metadata:
+        name: okta
+      spec:
+        display: "Okta"
+        acs: "https://grant-tam-teleport.gvteleport.com/v1/webapi/saml/acs/okta"
+        entity_descriptor_url: "{{ okta_metadata_url }}"
+        attributes_to_roles:
+          - name: "groups"
+            value: "{{ okta_groups_editor }}"
+            roles:
+              - editor
+              - access
+              - auditor
+          - name: "groups"
+            value: "{{ okta_groups_access }}"
+            roles:
+              - access
+
+- name: Create bootstrap SAML ConfigMap
   ansible.builtin.shell:
     cmd: |
-      printf 'kind: saml\nversion: v2\nmetadata:\n  name: okta\nspec:\n  display: "Okta"\n  acs: "https://grant-tam-teleport.gvteleport.com/v1/webapi/saml/acs/okta"\n  entity_descriptor_url: "%s"\n  attributes_to_roles:\n    - name: "groups"\n      value: "%s"\n      roles:\n        - editor\n        - access\n        - auditor\n        - okta_reviewer\n        - mcp-ollama-tools\n    - name: "groups"\n      value: "%s"\n      roles:\n        - access\n' \
-        "{{ okta_metadata_url }}" \
-        "{{ okta_groups_editor }}" \
-        "{{ okta_groups_access }}" | \
-      kubectl exec -i -n teleport {{ auth_pod.stdout }} -- tctl create -f -
+      kubectl create configmap saml-bootstrap -n teleport \
+        --from-file=saml-okta-bootstrap.yaml=/tmp/saml-okta-bootstrap.yaml \
+        --dry-run=client -o yaml | kubectl apply -f -
     executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Patch auth deployment to mount SAML bootstrap ConfigMap
+  ansible.builtin.shell:
+    cmd: |
+      kubectl patch deployment teleport-auth -n teleport --type=json -p='[
+        {"op":"add","path":"/spec/template/spec/volumes/-","value":{"name":"saml-bootstrap","configMap":{"name":"saml-bootstrap"}}},
+        {"op":"add","path":"/spec/template/spec/containers/0/volumeMounts/-","value":{"name":"saml-bootstrap","mountPath":"/tmp/saml-bootstrap","readOnly":true}}
+      ]'
+      kubectl rollout status deployment/teleport-auth -n teleport --timeout=120s
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Get auth pod name after rollout
+  ansible.builtin.command:
+    cmd: >
+      kubectl get pod -n teleport -l app.kubernetes.io/component=auth
+      -o jsonpath='{.items[0].metadata.name}'
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: auth_pod_after
+  changed_when: false
+
+- name: Create initial Okta SAML connector via tctl
+  ansible.builtin.command:
+    cmd: >
+      kubectl exec -n teleport {{ auth_pod_after.stdout }} --
+      tctl create -f /tmp/saml-bootstrap/saml-okta-bootstrap.yaml
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
   register: saml_result
@@ -44,14 +101,27 @@
     - '"already exists" not in saml_result.stderr'
   changed_when: saml_result.rc == 0
 
-- name: Pause for SAML connector to persist
-  ansible.builtin.pause:
-    seconds: 5
+- name: Cleanup SAML bootstrap volume and ConfigMap
+  ansible.builtin.shell:
+    cmd: |
+      MOUNT_IDX=$(kubectl get deployment teleport-auth -n teleport -o json | \
+        python3 -c "import json,sys; d=json.load(sys.stdin); mounts=d['spec']['template']['spec']['containers'][0].get('volumeMounts',[]); idxs=[str(i) for i,m in enumerate(mounts) if m['name']=='saml-bootstrap']; print(idxs[0] if idxs else '')")
+      VOL_IDX=$(kubectl get deployment teleport-auth -n teleport -o json | \
+        python3 -c "import json,sys; d=json.load(sys.stdin); vols=d['spec']['template']['spec'].get('volumes',[]); idxs=[str(i) for i,v in enumerate(vols) if v['name']=='saml-bootstrap']; print(idxs[0] if idxs else '')")
+      kubectl patch deployment teleport-auth -n teleport --type=json \
+        -p="[{\"op\":\"remove\",\"path\":\"/spec/template/spec/containers/0/volumeMounts/${MOUNT_IDX}\"},{\"op\":\"remove\",\"path\":\"/spec/template/spec/volumes/${VOL_IDX}\"}]"
+      kubectl rollout status deployment/teleport-auth -n teleport --timeout=120s
+      kubectl delete configmap saml-bootstrap -n teleport
+      rm -f /tmp/saml-okta-bootstrap.yaml
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
 
 - name: Verify SAML connector was created
   ansible.builtin.command:
     cmd: >
-      kubectl exec -n teleport {{ auth_pod.stdout }}
+      kubectl exec -n teleport {{ auth_pod_after.stdout }}
       -- tctl get saml/okta
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
