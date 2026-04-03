@@ -61,7 +61,7 @@ proxy_service:
 ssh_service:
   enabled: true
   labels:
-    team: platform
+    team: okta-teleport-users
     env: demo
     node: ssh-node-1
   commands:

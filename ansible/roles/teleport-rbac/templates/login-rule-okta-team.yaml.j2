@@ -16,8 +16,8 @@ spec:
       - external.groups
     # Maps the Okta 'groups' attribute directly to internal.team
     # Okta group name must match the target K8s namespace and EC2 node 'team' label exactly.
-    # e.g. Okta group 'platform' → internal.team = ['platform']
-    #      → kube-access scoped to namespace 'platform'
-    #      → ssh-access scoped to nodes with label team=platform
+    # e.g. Okta group 'okta-teleport-users' → internal.team = ['okta-teleport-users']
+    #      → okta_kube scoped to namespace 'okta-teleport-users'
+    #      → okta_ssh scoped to nodes with label team=okta-teleport-users
     team:
       - external.groups
