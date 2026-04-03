@@ -404,11 +404,9 @@ locals {
       "apps/teleport-rbac/rbac-sync-job.yaml" \
       "apps/teleport-rbac/resources/login-rule-okta-team.yaml" \
       "apps/teleport-rbac/resources/role-base.yaml" \
-      "apps/teleport-rbac/resources/role-kube-access.yaml" \
-      "apps/teleport-rbac/resources/role-ssh-access.yaml" \
-      "apps/teleport-rbac/resources/role-ssh-root-access.yaml" \
       "apps/teleport-rbac/resources/role-auto-approver.yaml" \
-      "apps/teleport-rbac/resources/cluster-auth-preference.yaml"; do
+      "apps/teleport-rbac/resources/cluster-auth-preference.yaml" \
+      "apps/teleport-rbac/resources/kube-cluster-label.yaml"; do
       echo "Fetching argocd/$argocd_file..."
       rm -f "$ARGOCD_DIR/$argocd_file"
       curl -fsSL "$REPO/argocd/$argocd_file" -o "$ARGOCD_DIR/$argocd_file" || { echo "ERROR: failed to fetch argocd/$argocd_file"; exit 1; }
