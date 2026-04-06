@@ -343,7 +343,7 @@
     cmd: >
       helm upgrade teleport teleport/teleport-cluster
       --namespace teleport
-      --version 18.7.1
+      --version 18.7.3
       --values /home/ubuntu/teleport-values.yaml
       --values /home/ubuntu/teleport-access-graph-patch.yaml
       --wait
