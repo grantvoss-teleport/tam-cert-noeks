@@ -56,6 +56,10 @@ auth:
       mountPath: /pg-certs
       readOnly: true
 
+  extraEnv:
+    - name: LICENSE_API_HOSTPORT
+      value: "api.cloud.gravitational.io"
+
 proxy:
   teleportConfig:
     teleport:
