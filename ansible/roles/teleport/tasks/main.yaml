@@ -71,7 +71,7 @@
     cmd: >
       helm upgrade --install teleport teleport/teleport-cluster
       --namespace teleport
-      --version 18.7.1
+      --version 18.7.3
       --values /home/ubuntu/teleport-values.yaml
       --wait
       --timeout 10m

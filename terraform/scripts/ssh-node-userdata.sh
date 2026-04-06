@@ -36,7 +36,7 @@ apt_install update
 apt_install install -y curl
 
 # ── Install Teleport Enterprise ────────────────────────────────────────────
-curl -fsSL https://cdn.teleport.dev/install-v18.7.1.sh | bash -s 18.7.1 enterprise
+curl -fsSL https://cdn.teleport.dev/install-v18.7.3.sh | bash -s 18.7.3 enterprise
 
 # ── Write Teleport node config ─────────────────────────────────────────────
 cat > /etc/teleport.yaml << 'TELEPORT_CFG'

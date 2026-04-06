@@ -681,7 +681,7 @@ spec:
     cmd: >
       helm upgrade --install teleport-agent teleport/teleport-kube-agent
       --namespace teleport
-      --version 18.7.1
+      --version 18.7.3
       --set roles=app
       --set proxyAddr=grant-tam-teleport.gvteleport.com:443
       --set joinParams.method=kubernetes
