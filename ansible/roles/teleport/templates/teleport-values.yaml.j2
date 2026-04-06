@@ -37,7 +37,7 @@ auth:
     teleport:
       log:
         output: stderr
-        severity: INFO
+        severity: DEBUG
       storage:
         type: postgresql
         conn_string: "postgresql://teleport@postgres-service.postgres.svc.cluster.local:5432/teleport_backend?sslmode=verify-full&sslcert=/pg-certs/client.crt&sslkey=/pg-certs/client.key&sslrootcert=/pg-certs/ca.crt&pool_max_conns=10"
