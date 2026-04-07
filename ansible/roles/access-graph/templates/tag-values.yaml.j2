@@ -22,4 +22,21 @@ identity_activity_center:
   s3_results: s3://grant-tam-identity-activity-transient/results/
   s3_large_files: s3://grant-tam-identity-activity-transient/large_files
   workgroup: grant-tam-identity-activity
-  sqs_queue_url: https://sqs.us-west-2.amazonaws.com/278576220453/grantvoss-q-1
+  sqs_queue_url: https://sqs.us-west-2.amazonaws.com/278576220453/grant-tam-identity-activity
+  # maxmind_geoip_city_db_path: "/etc/maxmindGeoIP/GeoLite2-City.mmdb"
+
+# To enable GeoIP enrichment (country, city, region, lat/long on audit events):
+#   1. Download GeoLite2-City.mmdb from https://dev.maxmind.com/geoip/geolite2-free-geolocation-data
+#   2. kubectl create secret generic maxmind-geoip-city-db --from-file=GeoLite2-City.mmdb -n teleport-access-graph
+#   3. Uncomment maxmind_geoip_city_db_path above and the volume/volumeMount blocks below
+#
+# volumes:
+# - name: maxmind-geoip-city-db
+#   secret:
+#     secretName: maxmind-geoip-city-db
+#     optional: false
+#
+# volumeMounts:
+# - name: maxmind-geoip-city-db
+#   mountPath: "/etc/maxmindGeoIP/"
+#   readOnly: true

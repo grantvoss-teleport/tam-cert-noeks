@@ -131,6 +131,24 @@ resource "aws_kms_key" "identity_activity" {
           "kms:DescribeKey"
         ]
         Resource = "*"
+      },
+      {
+        # S3 must encrypt messages it sends to the KMS-encrypted SQS queue.
+        Sid    = "AllowS3ForEncryptedSQS"
+        Effect = "Allow"
+        Principal = {
+          Service = "s3.amazonaws.com"
+        }
+        Action = [
+          "kms:GenerateDataKey",
+          "kms:Decrypt"
+        ]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
       }
     ]
   })
@@ -170,6 +188,14 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "identity_activity
       sse_algorithm     = "aws:kms"
       kms_master_key_id = aws_kms_key.identity_activity.arn
     }
+    bucket_key_enabled = true
+  }
+}
+
+resource "aws_s3_bucket_ownership_controls" "identity_activity_long" {
+  bucket = aws_s3_bucket.identity_activity_long.id
+  rule {
+    object_ownership = "BucketOwnerEnforced"
   }
 }
 
@@ -199,6 +225,14 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "identity_activity
       sse_algorithm     = "aws:kms"
       kms_master_key_id = aws_kms_key.identity_activity.arn
     }
+    bucket_key_enabled = true
+  }
+}
+
+resource "aws_s3_bucket_ownership_controls" "identity_activity_transient" {
+  bucket = aws_s3_bucket.identity_activity_transient.id
+  rule {
+    object_ownership = "BucketOwnerEnforced"
   }
 }
 
@@ -216,19 +250,42 @@ resource "aws_s3_bucket_lifecycle_configuration" "identity_activity_transient" {
     id     = "expire-transient-objects"
     status = "Enabled"
     expiration {
-      days = 7
+      days = 60
     }
     filter {}
   }
 }
 
-# ── SQS queue policy ──────────────────────────────────────────────────────────
-# The grantvoss-q-1 queue is pre-provisioned. This resource manages its access
-# policy so both the EC2 role and the S3 service can send messages to it.
-# S3 permission is required for bucket event notifications (s3 → SQS).
+# ── SQS queues ───────────────────────────────────────────────────────────────
+
+resource "aws_sqs_queue" "identity_activity_dlq" {
+  name                              = "${var.training_prefix}-identity-activity-dlq"
+  kms_master_key_id                 = aws_kms_key.identity_activity.arn
+  kms_data_key_reuse_period_seconds = 300
+  message_retention_seconds         = 604800 # 7 days
+
+  tags = merge(local.common_tags, {
+    Name = "${var.training_prefix}-identity-activity-dlq"
+  })
+}
+
+resource "aws_sqs_queue" "identity_activity" {
+  name                              = "${var.training_prefix}-identity-activity"
+  kms_master_key_id                 = aws_kms_key.identity_activity.arn
+  kms_data_key_reuse_period_seconds = 300
+
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.identity_activity_dlq.arn
+    maxReceiveCount     = 20
+  })
+
+  tags = merge(local.common_tags, {
+    Name = "${var.training_prefix}-identity-activity"
+  })
+}
 
 resource "aws_sqs_queue_policy" "identity_activity" {
-  queue_url = data.aws_sqs_queue.identity_activity.url
+  queue_url = aws_sqs_queue.identity_activity.url
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -246,7 +303,7 @@ resource "aws_sqs_queue_policy" "identity_activity" {
           "sqs:GetQueueAttributes",
           "sqs:GetQueueUrl"
         ]
-        Resource = data.aws_sqs_queue.identity_activity.arn
+        Resource = aws_sqs_queue.identity_activity.arn
       },
       {
         Sid    = "AllowS3Notification"
@@ -255,7 +312,7 @@ resource "aws_sqs_queue_policy" "identity_activity" {
           Service = "s3.amazonaws.com"
         }
         Action   = "sqs:SendMessage"
-        Resource = data.aws_sqs_queue.identity_activity.arn
+        Resource = aws_sqs_queue.identity_activity.arn
         Condition = {
           ArnLike = {
             "aws:SourceArn" = aws_s3_bucket.identity_activity_long.arn
@@ -277,7 +334,7 @@ resource "aws_s3_bucket_notification" "identity_activity_long" {
   bucket = aws_s3_bucket.identity_activity_long.id
 
   queue {
-    queue_arn     = data.aws_sqs_queue.identity_activity.arn
+    queue_arn     = aws_sqs_queue.identity_activity.arn
     events        = ["s3:ObjectCreated:*"]
     filter_suffix = ".parquet"
   }
@@ -285,14 +342,91 @@ resource "aws_s3_bucket_notification" "identity_activity_long" {
   depends_on = [aws_sqs_queue_policy.identity_activity]
 }
 
-# ── AWS Glue catalog database ─────────────────────────────────────────────────
-# Only the database is created here — Access Graph creates and manages the table
-# schema itself on first startup. Pre-creating the table causes Athena query
-# failures due to empty/mismatched column definitions.
+# ── AWS Glue catalog ──────────────────────────────────────────────────────────
 
 resource "aws_glue_catalog_database" "identity_activity" {
   name        = "${var.training_prefix}-identity-activity"
   description = "Teleport Identity Activity Center audit event catalog"
+}
+
+# Partition projection eliminates manual MSCK REPAIR TABLE — Athena resolves
+# tenant_id (injected) and event_date (daily range) partitions automatically.
+resource "aws_glue_catalog_table" "identity_activity" {
+  name          = "${var.training_prefix}-audit-events"
+  database_name = aws_glue_catalog_database.identity_activity.name
+  table_type    = "EXTERNAL_TABLE"
+  description   = "Teleport Identity Activity Center audit events"
+
+  parameters = {
+    "EXTERNAL"            = "TRUE"
+    "classification"      = "parquet"
+    "parquet.compression" = "SNAPPY"
+
+    "projection.enabled" = "true"
+
+    "projection.tenant_id.type" = "injected"
+
+    "projection.event_date.type"          = "date"
+    "projection.event_date.format"        = "yyyy-MM-dd"
+    "projection.event_date.interval"      = "1"
+    "projection.event_date.interval.unit" = "DAYS"
+    "projection.event_date.range"         = "NOW-4YEARS,NOW"
+
+    "storage.location.template" = "s3://${aws_s3_bucket.identity_activity_long.bucket}/data/$${tenant_id}/$${event_date}/"
+  }
+
+  storage_descriptor {
+    location      = "s3://${aws_s3_bucket.identity_activity_long.bucket}/data/"
+    input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
+    output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
+
+    ser_de_info {
+      serialization_library = "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"
+      parameters = {
+        "serialization.format" = "1"
+      }
+    }
+
+    columns { name = "event_source"        type = "string" }
+    columns { name = "identity"            type = "string" }
+    columns { name = "identity_kind"       type = "string" }
+    columns { name = "identity_id"         type = "string" }
+    columns { name = "token"               type = "string" }
+    columns { name = "action"              type = "string" }
+    columns { name = "origin"              type = "string" }
+    columns { name = "status"              type = "string" }
+    columns { name = "ip"                  type = "string" }
+    columns { name = "city"                type = "string" }
+    columns { name = "country"             type = "string" }
+    columns { name = "region"              type = "string" }
+    columns { name = "latitude"            type = "double" }
+    columns { name = "longitude"           type = "double" }
+    columns { name = "target_resource"     type = "string" }
+    columns { name = "target_kind"         type = "string" }
+    columns { name = "target_location"     type = "string" }
+    columns { name = "target_id"           type = "string" }
+    columns { name = "user_agent"          type = "string" }
+    columns { name = "event_type"          type = "string" }
+    columns { name = "event_time"          type = "timestamp" }
+    columns { name = "uid"                 type = "string" }
+    columns { name = "event_data"          type = "string" }
+    columns { name = "aws_account_id"      type = "string" }
+    columns { name = "aws_service"         type = "string" }
+    columns { name = "github_organization" type = "string" }
+    columns { name = "github_repo"         type = "string" }
+    columns { name = "okta_org"            type = "string" }
+    columns { name = "teleport_cluster"    type = "string" }
+  }
+
+  partition_keys {
+    name = "tenant_id"
+    type = "string"
+  }
+
+  partition_keys {
+    name = "event_date"
+    type = "date"
+  }
 }
 
 # ── Amazon Athena workgroup ───────────────────────────────────────────────────
@@ -303,6 +437,12 @@ resource "aws_athena_workgroup" "identity_activity" {
   force_destroy = true
 
   configuration {
+    bytes_scanned_cutoff_per_query = 21474836480 # 20 GB — prevents runaway query costs
+
+    engine_version {
+      selected_engine_version = "Athena engine version 3"
+    }
+
     result_configuration {
       output_location = "s3://${aws_s3_bucket.identity_activity_transient.bucket}/results/"
       encryption_configuration {
@@ -327,33 +467,56 @@ resource "aws_iam_role_policy" "identity_activity" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "S3LongTermAccess"
+        Sid    = "S3LongTermBucketAccess"
         Effect = "Allow"
         Action = [
-          "s3:PutObject",
-          "s3:GetObject",
-          "s3:DeleteObject",
           "s3:ListBucket",
-          "s3:GetBucketLocation"
+          "s3:GetBucketLocation",
+          "s3:ListBucketMultipartUploads",
+          "s3:ListBucketVersions"
         ]
-        Resource = [
-          aws_s3_bucket.identity_activity_long.arn,
-          "${aws_s3_bucket.identity_activity_long.arn}/*"
-        ]
+        Resource = aws_s3_bucket.identity_activity_long.arn
       },
       {
-        Sid    = "S3TransientAccess"
+        Sid    = "S3LongTermObjectAccess"
         Effect = "Allow"
         Action = [
           "s3:PutObject",
           "s3:GetObject",
+          "s3:GetObjectVersion",
           "s3:DeleteObject",
+          "s3:DeleteObjectVersion",
+          "s3:AbortMultipartUpload",
+          "s3:ListMultipartUploadParts"
+        ]
+        Resource = "${aws_s3_bucket.identity_activity_long.arn}/data/*"
+      },
+      {
+        Sid    = "S3TransientBucketAccess"
+        Effect = "Allow"
+        Action = [
           "s3:ListBucket",
-          "s3:GetBucketLocation"
+          "s3:GetBucketLocation",
+          "s3:ListBucketMultipartUploads",
+          "s3:ListBucketVersions"
+        ]
+        Resource = aws_s3_bucket.identity_activity_transient.arn
+      },
+      {
+        Sid    = "S3TransientObjectAccess"
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:GetObject",
+          "s3:GetObjectVersion",
+          "s3:DeleteObject",
+          "s3:DeleteObjectVersion",
+          "s3:AbortMultipartUpload",
+          "s3:ListMultipartUploadParts"
         ]
         Resource = [
-          aws_s3_bucket.identity_activity_transient.arn,
-          "${aws_s3_bucket.identity_activity_transient.arn}/*"
+          "${aws_s3_bucket.identity_activity_transient.arn}/results/*",
+          "${aws_s3_bucket.identity_activity_transient.arn}/large_files/*"
         ]
       },
       {
@@ -361,18 +524,12 @@ resource "aws_iam_role_policy" "identity_activity" {
         Effect = "Allow"
         Action = [
           "glue:GetDatabase",
-          "glue:GetTable",
-          "glue:GetPartitions",
-          "glue:BatchCreatePartition",
-          "glue:CreatePartition",
-          "glue:CreateTable",
-          "glue:UpdateTable",
-          "glue:DeleteTable"
+          "glue:GetTable"
         ]
         Resource = [
           "arn:aws:glue:us-west-2:${data.aws_caller_identity.current.account_id}:catalog",
           aws_glue_catalog_database.identity_activity.arn,
-          "arn:aws:glue:us-west-2:${data.aws_caller_identity.current.account_id}:table/${aws_glue_catalog_database.identity_activity.name}/*"
+          aws_glue_catalog_table.identity_activity.arn
         ]
       },
       {
@@ -407,7 +564,7 @@ resource "aws_iam_role_policy" "identity_activity" {
           "sqs:GetQueueAttributes",
           "sqs:GetQueueUrl"
         ]
-        Resource = data.aws_sqs_queue.identity_activity.arn
+        Resource = aws_sqs_queue.identity_activity.arn
       }
     ]
   })
@@ -433,4 +590,14 @@ output "identity_activity_kms_arn" {
 output "identity_activity_workgroup" {
   value       = aws_athena_workgroup.identity_activity.name
   description = "Athena workgroup for Identity Activity Center"
+}
+
+output "identity_activity_sqs_queue_url" {
+  value       = aws_sqs_queue.identity_activity.url
+  description = "SQS queue URL for Identity Activity Center"
+}
+
+output "identity_activity_sqs_dlq_url" {
+  value       = aws_sqs_queue.identity_activity_dlq.url
+  description = "SQS dead-letter queue URL for Identity Activity Center"
 }
