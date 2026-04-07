@@ -387,35 +387,122 @@ resource "aws_glue_catalog_table" "identity_activity" {
       }
     }
 
-    columns { name = "event_source"        type = "string" }
-    columns { name = "identity"            type = "string" }
-    columns { name = "identity_kind"       type = "string" }
-    columns { name = "identity_id"         type = "string" }
-    columns { name = "token"               type = "string" }
-    columns { name = "action"              type = "string" }
-    columns { name = "origin"              type = "string" }
-    columns { name = "status"              type = "string" }
-    columns { name = "ip"                  type = "string" }
-    columns { name = "city"                type = "string" }
-    columns { name = "country"             type = "string" }
-    columns { name = "region"              type = "string" }
-    columns { name = "latitude"            type = "double" }
-    columns { name = "longitude"           type = "double" }
-    columns { name = "target_resource"     type = "string" }
-    columns { name = "target_kind"         type = "string" }
-    columns { name = "target_location"     type = "string" }
-    columns { name = "target_id"           type = "string" }
-    columns { name = "user_agent"          type = "string" }
-    columns { name = "event_type"          type = "string" }
-    columns { name = "event_time"          type = "timestamp" }
-    columns { name = "uid"                 type = "string" }
-    columns { name = "event_data"          type = "string" }
-    columns { name = "aws_account_id"      type = "string" }
-    columns { name = "aws_service"         type = "string" }
-    columns { name = "github_organization" type = "string" }
-    columns { name = "github_repo"         type = "string" }
-    columns { name = "okta_org"            type = "string" }
-    columns { name = "teleport_cluster"    type = "string" }
+    columns {
+      name = "event_source"
+      type = "string"
+    }
+    columns {
+      name = "identity"
+      type = "string"
+    }
+    columns {
+      name = "identity_kind"
+      type = "string"
+    }
+    columns {
+      name = "identity_id"
+      type = "string"
+    }
+    columns {
+      name = "token"
+      type = "string"
+    }
+    columns {
+      name = "action"
+      type = "string"
+    }
+    columns {
+      name = "origin"
+      type = "string"
+    }
+    columns {
+      name = "status"
+      type = "string"
+    }
+    columns {
+      name = "ip"
+      type = "string"
+    }
+    columns {
+      name = "city"
+      type = "string"
+    }
+    columns {
+      name = "country"
+      type = "string"
+    }
+    columns {
+      name = "region"
+      type = "string"
+    }
+    columns {
+      name = "latitude"
+      type = "double"
+    }
+    columns {
+      name = "longitude"
+      type = "double"
+    }
+    columns {
+      name = "target_resource"
+      type = "string"
+    }
+    columns {
+      name = "target_kind"
+      type = "string"
+    }
+    columns {
+      name = "target_location"
+      type = "string"
+    }
+    columns {
+      name = "target_id"
+      type = "string"
+    }
+    columns {
+      name = "user_agent"
+      type = "string"
+    }
+    columns {
+      name = "event_type"
+      type = "string"
+    }
+    columns {
+      name = "event_time"
+      type = "timestamp"
+    }
+    columns {
+      name = "uid"
+      type = "string"
+    }
+    columns {
+      name = "event_data"
+      type = "string"
+    }
+    columns {
+      name = "aws_account_id"
+      type = "string"
+    }
+    columns {
+      name = "aws_service"
+      type = "string"
+    }
+    columns {
+      name = "github_organization"
+      type = "string"
+    }
+    columns {
+      name = "github_repo"
+      type = "string"
+    }
+    columns {
+      name = "okta_org"
+      type = "string"
+    }
+    columns {
+      name = "teleport_cluster"
+      type = "string"
+    }
   }
 
   partition_keys {
