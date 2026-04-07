@@ -96,6 +96,10 @@ output "sessions_bucket" {
 
 data "aws_caller_identity" "current" {}
 
+data "aws_sqs_queue" "identity_activity" {
+  name = "grantvoss-q-1"
+}
+
 # ── KMS key for encrypting S3 objects and SQS messages ───────────────────────
 
 resource "aws_kms_key" "identity_activity" {
@@ -216,6 +220,69 @@ resource "aws_s3_bucket_lifecycle_configuration" "identity_activity_transient" {
     }
     filter {}
   }
+}
+
+# ── SQS queue policy ──────────────────────────────────────────────────────────
+# The grantvoss-q-1 queue is pre-provisioned. This resource manages its access
+# policy so both the EC2 role and the S3 service can send messages to it.
+# S3 permission is required for bucket event notifications (s3 → SQS).
+
+resource "aws_sqs_queue_policy" "identity_activity" {
+  queue_url = data.aws_sqs_queue.identity_activity.url
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowEC2Role"
+        Effect = "Allow"
+        Principal = {
+          AWS = aws_iam_role.ec2.arn
+        }
+        Action = [
+          "sqs:SendMessage",
+          "sqs:ReceiveMessage",
+          "sqs:DeleteMessage",
+          "sqs:GetQueueAttributes",
+          "sqs:GetQueueUrl"
+        ]
+        Resource = data.aws_sqs_queue.identity_activity.arn
+      },
+      {
+        Sid    = "AllowS3Notification"
+        Effect = "Allow"
+        Principal = {
+          Service = "s3.amazonaws.com"
+        }
+        Action   = "sqs:SendMessage"
+        Resource = data.aws_sqs_queue.identity_activity.arn
+        Condition = {
+          ArnLike = {
+            "aws:SourceArn" = aws_s3_bucket.identity_activity_long.arn
+          }
+          StringEquals = {
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
+      }
+    ]
+  })
+}
+
+# ── S3 event notification → SQS ───────────────────────────────────────────────
+# Triggers an SQS message for each new Parquet file written to the long-term
+# bucket so Access Graph can register the partition in the Glue catalog.
+
+resource "aws_s3_bucket_notification" "identity_activity_long" {
+  bucket = aws_s3_bucket.identity_activity_long.id
+
+  queue {
+    queue_arn     = data.aws_sqs_queue.identity_activity.arn
+    events        = ["s3:ObjectCreated:*"]
+    filter_suffix = ".parquet"
+  }
+
+  depends_on = [aws_sqs_queue_policy.identity_activity]
 }
 
 # ── AWS Glue catalog database ─────────────────────────────────────────────────
@@ -340,7 +407,7 @@ resource "aws_iam_role_policy" "identity_activity" {
           "sqs:GetQueueAttributes",
           "sqs:GetQueueUrl"
         ]
-        Resource = "arn:aws:sqs:us-west-2:${data.aws_caller_identity.current.account_id}:grantvoss-q-1"
+        Resource = data.aws_sqs_queue.identity_activity.arn
       }
     ]
   })
