@@ -1,0 +1,26 @@
+# ArgoCD Application: customers
+# Watches argocd/apps/customers/ in the repo.
+# Deploys the customers namespace, MySQL backend, and customers-api service.
+# The customers-api is exposed via Teleport app access (see rbac-configmap.yaml).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: customers
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/grantvoss-teleport/tam-cert-noeks.git
+    targetRevision: main
+    path: argocd/apps/customers
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: customers
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

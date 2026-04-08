@@ -1,0 +1,14 @@
+# ClusterIP (not LoadBalancer) — this cluster has no cloud LoadBalancer provisioner.
+# customers-api is accessed via Teleport app proxy using the in-cluster service URI.
+apiVersion: v1
+kind: Service
+metadata:
+  name: customers-api
+  namespace: customers
+spec:
+  type: ClusterIP
+  selector:
+    app: customers-api
+  ports:
+    - port: 80
+      targetPort: 8080
