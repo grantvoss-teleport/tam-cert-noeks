@@ -74,7 +74,6 @@ highAvailability:
   requireAntiAffinity: false
 
 # ─── Authentication ───────────────────────────────────────────────────────────
-authentication:
-  type: local
-  localAuth: true
-  secondFactor: "otp"
+# cluster_auth_preference is NOT set here — it is managed by the ArgoCD RBAC
+# sync job (tctl create --confirm cluster-auth-preference.yaml). Setting it in
+# Helm values causes every helm upgrade to reset it back to local, dropping SAML.
