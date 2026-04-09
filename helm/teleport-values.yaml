@@ -67,6 +67,10 @@ proxy:
         severity: INFO
     proxy_service:
       https_keypairs_reload_interval: 12h
+# NOTE: app_service belongs in the teleport-kube-agent chart (--set roles=app),
+# NOT here. Adding app_service to the proxy config causes a startup crash in
+# Teleport v13+ because the proxy uses auth_server internally, which conflicts
+# with the requirement to use proxy_server when app_service is enabled.
 
 # ─── High Availability ────────────────────────────────────────────────────────
 highAvailability:
@@ -74,7 +78,6 @@ highAvailability:
   requireAntiAffinity: false
 
 # ─── Authentication ───────────────────────────────────────────────────────────
-authentication:
-  type: local
-  localAuth: true
-  secondFactor: "otp"
+# cluster_auth_preference is NOT set here — it is managed by the ArgoCD RBAC
+# sync job (tctl create --confirm cluster-auth-preference.yaml). Setting it in
+# Helm values causes every helm upgrade to reset it back to local, dropping SAML.
