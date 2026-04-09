@@ -262,3 +262,31 @@ data:
       kinds:
         - ssh
       model: skynet-gemma
+
+  role-okta-app-access.yaml: |
+    kind: role
+    version: v7
+    metadata:
+      name: okta_app_access
+      description: "App access for Okta editor group — browser SSO to env:demo labeled apps"
+    spec:
+      allow:
+        app_labels:
+          env: demo
+      deny: {}
+      options:
+        max_session_ttl: 8h
+        lock: best_effort
+
+  app-customers-api.yaml: |
+    kind: app
+    version: v3
+    metadata:
+      name: customers-api
+      description: "Customers API - REST API for customer purchase data"
+      labels:
+        env: demo
+        team: platform
+    spec:
+      uri: http://customers-api.customers.svc.cluster.local:80
+      public_addr: customers-api.grant-tam-teleport.gvteleport.com

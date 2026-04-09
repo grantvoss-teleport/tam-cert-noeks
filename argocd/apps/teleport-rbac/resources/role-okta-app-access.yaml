@@ -1,0 +1,13 @@
+kind: role
+version: v7
+metadata:
+  name: okta_app_access
+  description: "App access for Okta editor group — browser SSO to env:demo labeled apps"
+spec:
+  allow:
+    app_labels:
+      env: demo
+  deny: {}
+  options:
+    max_session_ttl: 8h
+    lock: best_effort

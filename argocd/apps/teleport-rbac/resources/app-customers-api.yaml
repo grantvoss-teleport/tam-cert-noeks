@@ -1,0 +1,11 @@
+kind: app
+version: v3
+metadata:
+  name: customers-api
+  description: "Customers API - REST API for customer purchase data"
+  labels:
+    env: demo
+    team: platform
+spec:
+  uri: http://customers-api.customers.svc.cluster.local:80
+  public_addr: customers-api.grant-tam-teleport.gvteleport.com

@@ -410,6 +410,7 @@
               - auditor
               - okta_reviewer
               - mcp-ollama-tools
+              - okta_app_access
           - name: "groups"
             value: "{{ okta_groups_access }}"
             roles:

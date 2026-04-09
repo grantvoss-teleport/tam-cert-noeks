@@ -107,7 +107,9 @@ spec:
                 role-okta-base.yaml \
                 access-monitoring-rule-okta-ssh.yaml \
                 inference-model.yaml \
-                inference-policy.yaml; do
+                inference-policy.yaml \
+                role-okta-app-access.yaml \
+                app-customers-api.yaml; do
                 echo "--- Applying ${f} ---"
                 kubectl exec -n teleport "${AUTH_POD}" -- \
                   tctl create -f "/tmp/rbac-sync/${f}" && echo "${f}: OK" \
