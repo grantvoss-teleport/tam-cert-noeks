@@ -12,18 +12,11 @@ acmeEmail: grant.voss@goteleport.com
 
 proxyListenerMode: multiplex
 
-# ── Authentication ─────────────────────────────────────────────────────────────
-# Default to local auth at bootstrap — the SAML connector doesn't exist yet.
-# ArgoCD (step 11) applies cluster_auth_preference switching to saml/okta
-# once the connector has been created by teleport-sso (step 8).
-authentication:
-  type: local
-  localAuth: true
-  secondFactors:
-    - otp
-    - webauthn
-  webauthn:
-    rpID: grant-tam-teleport.gvteleport.com
+# NOTE: cluster_auth_preference is intentionally NOT set here.
+# Setting authentication.type in Helm values re-applies it on every helm upgrade,
+# overriding the saml/okta preference managed by the ArgoCD RBAC sync (tctl).
+# Initial local-auth bootstrap is handled by Teleport's default (local) before
+# the teleport-sso Ansible step creates the SAML connector.
 
 # ── Service ────────────────────────────────────────────────────────────────────
 # The Helm chart does not support pinning nodePort via values (known limitation).
@@ -68,9 +61,6 @@ proxy:
         severity: INFO
     proxy_service:
       https_keypairs_reload_interval: 12h
-    app_service:
-      enabled: true
-      apps: []
 
 highAvailability:
   replicaCount: 1
