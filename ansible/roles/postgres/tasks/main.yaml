@@ -195,6 +195,28 @@
     - /tmp/teleport-client.key
     - /tmp/teleport-ca.crt
 
+# ── EFS StorageClass + PVC ────────────────────────────────────────────────────
+
+- name: Template EFS StorageClass
+  ansible.builtin.template:
+    src: efs-storageclass.yaml.j2
+    dest: /tmp/efs-storageclass.yaml
+    mode: "0644"
+
+- name: Apply EFS StorageClass
+  ansible.builtin.command:
+    cmd: kubectl apply -f /tmp/efs-storageclass.yaml
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
+- name: Apply postgres PVC
+  ansible.builtin.command:
+    cmd: kubectl apply -f /home/ubuntu/ansible/roles/postgres/files/postgres-pvc.yaml
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
 # ── Deploy postgres ───────────────────────────────────────────────────────────
 
 - name: Apply postgres admin secret

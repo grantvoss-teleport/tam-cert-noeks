@@ -56,3 +56,33 @@
 - name: Store join command as a host fact for workers
   ansible.builtin.set_fact:
     kubeadm_join: "{{ kubeadm_join_cmd.stdout }}"
+
+# ── EFS CSI Driver ────────────────────────────────────────────────────────────
+# Installed here (cluster bootstrap phase) so the efs-sc StorageClass and
+# postgres PVC created in the postgres role have a working provisioner.
+
+- name: Install Helm
+  ansible.builtin.shell:
+    cmd: curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+    creates: /usr/local/bin/helm
+
+- name: Add EFS CSI driver Helm repo
+  ansible.builtin.command:
+    cmd: helm repo add aws-efs-csi-driver https://kubernetes-sigs.github.io/aws-efs-csi-driver/
+  changed_when: false
+
+- name: Update Helm repos
+  ansible.builtin.command:
+    cmd: helm repo update
+  changed_when: false
+
+- name: Install EFS CSI driver
+  ansible.builtin.command:
+    cmd: >
+      helm upgrade --install aws-efs-csi-driver aws-efs-csi-driver/aws-efs-csi-driver
+      --namespace kube-system
+      --wait
+      --timeout 5m
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  changed_when: true
