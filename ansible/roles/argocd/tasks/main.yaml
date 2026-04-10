@@ -694,7 +694,7 @@
       --set joinParams.tokenName=teleport-app-agent
       --set apps[0].name=argocd
       --set apps[0].uri=http://argocd-server.argocd.svc.cluster.local:80
-      --wait --timeout 5m
+      --wait --timeout 10m
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: true
