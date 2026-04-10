@@ -96,7 +96,8 @@ spec:
             periodSeconds: 10
       volumes:
         - name: postgres-data
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: postgres-data
         - name: certs-ro
           secret:
             secretName: postgres-certs

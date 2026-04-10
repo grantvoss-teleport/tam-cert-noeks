@@ -326,6 +326,7 @@ locals {
     printf 'export GITHUB_REPOSITORY=grantvoss-teleport/tam-cert-noeks\n' >> /home/ubuntu/.teleport-env
     printf "export POSTGRES_ADMIN_PASSWORD='%s'\n" "${random_password.postgres_admin.result}" >> /home/ubuntu/.teleport-env
     printf "export ACCESS_GRAPH_DB_PASSWORD='%s'\n" "${random_password.access_graph_db.result}" >> /home/ubuntu/.teleport-env
+    printf 'export EFS_FILESYSTEM_ID=%s\n' "${aws_efs_file_system.postgres.id}" >> /home/ubuntu/.teleport-env
     touch /home/ubuntu/.teleport-env
     chmod 600 /home/ubuntu/.teleport-env
     chown ubuntu:ubuntu /home/ubuntu/.teleport-env
@@ -360,6 +361,7 @@ locals {
     mkdir -p "$ANSIBLE_DIR/argocd/apps/teleport-rbac/resources"
     mkdir -p "$ANSIBLE_DIR/roles/postgres/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/postgres/files"
+    mkdir -p "$ANSIBLE_DIR/roles/postgres/templates"
     mkdir -p "$ANSIBLE_DIR/roles/access-graph/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/access-graph/templates"
 
@@ -419,7 +421,9 @@ locals {
       "roles/postgres/files/pg-hba-config.yaml" \
       "roles/postgres/files/init-sql.yaml" \
       "roles/postgres/files/postgres-deployment.yaml" \
+      "roles/postgres/files/postgres-pvc.yaml" \
       "roles/postgres/files/postgres-svc.yaml" \
+      "roles/postgres/templates/efs-storageclass.yaml.j2" \
       "roles/access-graph/tasks/main.yaml" \
       "roles/access-graph/templates/tag-values.yaml.j2" \
       "roles/access-graph/templates/teleport-access-graph-patch.yaml.j2"; do
