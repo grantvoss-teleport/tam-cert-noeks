@@ -148,3 +148,53 @@
 - name: Print Teleport pod status
   ansible.builtin.debug:
     msg: "{{ teleport_pods.stdout_lines }}"
+
+# ── CoreDNS in-cluster rewrite ────────────────────────────────────────────────
+# AWS NLB does not support hairpin NAT: pods on target-group nodes cannot reach
+# the NLB VIP and loop back to themselves. Without this fix, in-cluster agents
+# (teleport-kube-agent, app agent) get "tls: internal error" when connecting to
+# the proxy via the public hostname.
+# The rewrite makes in-cluster DNS resolve the Teleport proxy hostname directly
+# to the ClusterIP of the teleport Service, bypassing the NLB entirely.
+# External DNS is unaffected — this only changes resolution inside the cluster.
+
+- name: Get Teleport cluster name from Helm release
+  ansible.builtin.shell:
+    cmd: helm get values teleport -n teleport -o yaml | grep '^clusterName:' | awk '{print $2}'
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  register: teleport_cluster_name
+  changed_when: false
+
+- name: Add CoreDNS rewrite for Teleport proxy in-cluster routing
+  ansible.builtin.shell:
+    cmd: |
+      DOMAIN="{{ teleport_cluster_name.stdout }}"
+      REWRITE="    rewrite name ${DOMAIN} teleport.teleport.svc.cluster.local"
+
+      # Idempotency check
+      if kubectl get configmap coredns -n kube-system \
+          -o jsonpath='{.data.Corefile}' | grep -q "${DOMAIN}"; then
+        echo "CoreDNS rewrite for ${DOMAIN} already present — skipping."
+        exit 0
+      fi
+
+      # Inject rewrite line before the 'loadbalance' directive
+      kubectl get configmap coredns -n kube-system -o json | \
+        python3 -c "
+      import json, sys
+      cm = json.load(sys.stdin)
+      corefile = cm['data']['Corefile']
+      line = '    rewrite name ${DOMAIN} teleport.teleport.svc.cluster.local\n'
+      cm['data']['Corefile'] = corefile.replace('    loadbalance\n', line + '    loadbalance\n')
+      print(json.dumps(cm))
+      " | kubectl apply -f -
+
+      kubectl rollout restart deployment/coredns -n kube-system
+      kubectl rollout status deployment/coredns -n kube-system --timeout=60s
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: /home/ubuntu/.kube/config
+  changed_when: true
+
