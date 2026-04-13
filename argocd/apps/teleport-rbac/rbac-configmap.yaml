@@ -227,8 +227,8 @@ data:
     metadata:
       name: cluster-auth-preference
     spec:
-      type: saml
-      connector_name: okta
+      type: oidc
+      connector_name: auth0
       local_auth: true
       second_factor: "on"
       webauthn:

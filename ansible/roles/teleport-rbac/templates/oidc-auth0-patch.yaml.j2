@@ -1,0 +1,23 @@
+kind: oidc
+version: v3
+metadata:
+  name: auth0
+spec:
+  display: "Auth0"
+  issuer_url: "{{ auth0_domain }}"
+  client_id: "{{ auth0_client_id }}"
+  client_secret: "{{ auth0_client_secret }}"
+  redirect_url: "https://{{ teleport_domain }}/v1/webapi/oidc/callback"
+  scope:
+    - openid
+    - profile
+    - email
+  claims_to_roles:
+    # Wildcard: every Auth0 user gets base regardless of group.
+    # Ensures all authenticated users start with zero standing privilege.
+    - { claim: "groups", value: "*",                         roles: ["base"] }
+    # Editor group: full editor + access standing privileges + explicit app access.
+    - { claim: "groups", value: "{{ auth0_groups_editor }}", roles: ["editor", "access", "okta_app_access"] }
+    # Access group: mapped to okta_base only — no standing privileges.
+    # Users must submit an Access Request for okta_ssh, okta_kube, or okta_ssh_root.
+    - { claim: "groups", value: "{{ auth0_groups_access }}", roles: ["okta_base"] }

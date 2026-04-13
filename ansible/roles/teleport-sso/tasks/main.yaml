@@ -1,7 +1,7 @@
 ---
 # teleport-sso/tasks/main.yaml
 #
-# Bootstrap-only: creates the Okta SAML connector so the cluster has a working
+# Bootstrap-only: creates the Auth0 OIDC connector so the cluster has a working
 # SSO connector before the Machine ID GitHub Actions workflow takes over.
 #
 # What this role does NOT do (handled by GitHub Actions + Machine ID):
@@ -10,6 +10,12 @@
 # Those are managed by .github/workflows/teleport-rbac.yml via tbot/tctl
 # so that all auth config changes go through the same audited, secretless path.
 # cluster_auth_preference initial state is also set via Helm values at boot.
+#
+# Auth0 prerequisite: an Auth0 Action must be configured to emit a "groups" claim:
+#   exports.onExecutePostLogin = async (event, api) => {
+#     api.idToken.setCustomClaim('groups', event.authorization?.roles ?? []);
+#     api.accessToken.setCustomClaim('groups', event.authorization?.roles ?? []);
+#   };
 
 - name: Get auth pod name
   ansible.builtin.command:
@@ -21,7 +27,7 @@
   register: auth_pod
   changed_when: false
 
-# ─── Create initial Okta SAML connector ──────────────────────────────────────
+# ─── Create initial Auth0 OIDC connector ─────────────────────────────────────
 # Creates a bootstrap connector with editor + access mappings using only
 # built-in Teleport roles (no custom roles exist yet at this step).
 # The argocd role (step 11) updates this connector after ArgoCD has applied
@@ -29,48 +35,54 @@
 #
 # Uses ConfigMap mount pattern — kubectl exec -i stdin truncates on distroless.
 
-- name: Write bootstrap SAML connector to temp file
+- name: Write bootstrap OIDC connector to temp file
   ansible.builtin.copy:
-    dest: /tmp/saml-okta-bootstrap.yaml
+    dest: /tmp/oidc-auth0-bootstrap.yaml
     mode: "0600"
     content: |
-      kind: saml
-      version: v2
+      kind: oidc
+      version: v3
       metadata:
-        name: okta
+        name: auth0
       spec:
-        display: "Okta"
-        acs: "https://grant-tam-teleport.gvteleport.com/v1/webapi/saml/acs/okta"
-        entity_descriptor_url: "{{ okta_metadata_url }}"
-        attributes_to_roles:
-          - name: "groups"
-            value: "{{ okta_groups_editor }}"
+        display: "Auth0"
+        issuer_url: "{{ auth0_domain }}"
+        client_id: "{{ auth0_client_id }}"
+        client_secret: "{{ auth0_client_secret }}"
+        redirect_url: "https://grant-tam-teleport.gvteleport.com/v1/webapi/oidc/callback"
+        scope:
+          - openid
+          - profile
+          - email
+        claims_to_roles:
+          - claim: "groups"
+            value: "{{ auth0_groups_editor }}"
             roles:
               - editor
               - access
               - auditor
-          - name: "groups"
-            value: "{{ okta_groups_access }}"
+          - claim: "groups"
+            value: "{{ auth0_groups_access }}"
             roles:
               - access
 
-- name: Create bootstrap SAML ConfigMap
+- name: Create bootstrap OIDC ConfigMap
   ansible.builtin.shell:
     cmd: |
-      kubectl create configmap saml-bootstrap -n teleport \
-        --from-file=saml-okta-bootstrap.yaml=/tmp/saml-okta-bootstrap.yaml \
+      kubectl create configmap oidc-bootstrap -n teleport \
+        --from-file=oidc-auth0-bootstrap.yaml=/tmp/oidc-auth0-bootstrap.yaml \
         --dry-run=client -o yaml | kubectl apply -f -
     executable: /bin/bash
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: true
 
-- name: Patch auth deployment to mount SAML bootstrap ConfigMap
+- name: Patch auth deployment to mount OIDC bootstrap ConfigMap
   ansible.builtin.shell:
     cmd: |
       kubectl patch deployment teleport-auth -n teleport --type=json -p='[
-        {"op":"add","path":"/spec/template/spec/volumes/-","value":{"name":"saml-bootstrap","configMap":{"name":"saml-bootstrap"}}},
-        {"op":"add","path":"/spec/template/spec/containers/0/volumeMounts/-","value":{"name":"saml-bootstrap","mountPath":"/tmp/saml-bootstrap","readOnly":true}}
+        {"op":"add","path":"/spec/template/spec/volumes/-","value":{"name":"oidc-bootstrap","configMap":{"name":"oidc-bootstrap"}}},
+        {"op":"add","path":"/spec/template/spec/containers/0/volumeMounts/-","value":{"name":"oidc-bootstrap","mountPath":"/tmp/oidc-bootstrap","readOnly":true}}
       ]'
       kubectl rollout status deployment/teleport-auth -n teleport --timeout=120s
     executable: /bin/bash
@@ -88,33 +100,33 @@
   register: auth_pod_after
   changed_when: false
 
-- name: Create initial Okta SAML connector via tctl
+- name: Create initial Auth0 OIDC connector via tctl
   ansible.builtin.command:
     cmd: >
       kubectl exec -n teleport {{ auth_pod_after.stdout }} --
-      tctl create -f /tmp/saml-bootstrap/saml-okta-bootstrap.yaml
+      tctl create -f /tmp/oidc-bootstrap/oidc-auth0-bootstrap.yaml
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
-  register: saml_result
+  register: oidc_result
   failed_when:
-    - saml_result.rc != 0
-    - '"already exists" not in saml_result.stderr'
-  changed_when: saml_result.rc == 0
+    - oidc_result.rc != 0
+    - '"already exists" not in oidc_result.stderr'
+  changed_when: oidc_result.rc == 0
 
-- name: Cleanup SAML bootstrap volume and ConfigMap
+- name: Cleanup OIDC bootstrap volume and ConfigMap
   ansible.builtin.shell:
     cmd: |
       VOL_IDX=$(kubectl get deployment teleport-auth -n teleport \
         -o jsonpath='{range .spec.template.spec.volumes[*]}{.name}{"\n"}{end}' | \
-        awk '/^saml-bootstrap$/{print NR-1; exit}')
+        awk '/^oidc-bootstrap$/{print NR-1; exit}')
       MOUNT_IDX=$(kubectl get deployment teleport-auth -n teleport \
         -o jsonpath='{range .spec.template.spec.containers[0].volumeMounts[*]}{.name}{"\n"}{end}' | \
-        awk '/^saml-bootstrap$/{print NR-1; exit}')
+        awk '/^oidc-bootstrap$/{print NR-1; exit}')
       kubectl patch deployment teleport-auth -n teleport --type=json \
         -p="[{\"op\":\"remove\",\"path\":\"/spec/template/spec/containers/0/volumeMounts/${MOUNT_IDX}\"},{\"op\":\"remove\",\"path\":\"/spec/template/spec/volumes/${VOL_IDX}\"}]"
       kubectl rollout status deployment/teleport-auth -n teleport --timeout=120s
-      kubectl delete configmap saml-bootstrap -n teleport
-      rm -f /tmp/saml-okta-bootstrap.yaml
+      kubectl delete configmap oidc-bootstrap -n teleport
+      rm -f /tmp/oidc-auth0-bootstrap.yaml
     executable: /bin/bash
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
@@ -130,24 +142,24 @@
   register: auth_pod_final
   changed_when: false
 
-- name: Verify SAML connector was created
+- name: Verify OIDC connector was created
   ansible.builtin.command:
     cmd: >
       kubectl exec -n teleport {{ auth_pod_final.stdout }}
-      -- tctl get saml/okta
+      -- tctl get oidc/auth0
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: false
-  register: saml_verify
+  register: oidc_verify
 
-- name: Print SAML connector status
+- name: Print OIDC connector status
   ansible.builtin.debug:
-    msg: "{{ saml_verify.stdout_lines }}"
+    msg: "{{ oidc_verify.stdout_lines }}"
 
-- name: Remind operator that full SAML mapping is applied by argocd role
+- name: Remind operator that full OIDC mapping is applied by argocd role
   ansible.builtin.debug:
     msg: >
-      Bootstrap Okta SAML connector created (built-in roles only).
+      Bootstrap Auth0 OIDC connector created (built-in roles only).
       The argocd role (step 11) will update this connector with the full
-      attributes_to_roles mapping including base and okta_base after
+      claims_to_roles mapping including base and okta_base after
       ArgoCD has applied all custom roles.
