@@ -3,9 +3,9 @@ version: v2
 metadata:
   name: cluster-auth-preference
 spec:
-  # Primary auth via Okta SAML SSO. Local auth retained for break-glass only.
-  type: saml
-  connector_name: okta
+  # Primary auth via Auth0 OIDC SSO. Local auth retained for break-glass only.
+  type: oidc
+  connector_name: auth0
   local_auth: true
   second_factor: "on"
   webauthn:

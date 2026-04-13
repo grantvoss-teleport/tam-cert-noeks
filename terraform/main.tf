@@ -44,14 +44,21 @@ variable "github_repo"     { default = "https://raw.githubusercontent.com/grantv
 variable "aws_oidc_role_arn" {
   description = "ARN of the existing IAM role for Teleport AWS OIDC integration"
 }
-variable "okta_metadata_url" {
-  description = "SAML metadata URL from Okta app Sign On tab"
+variable "auth0_domain" {
+  description = "Auth0 tenant URL (e.g. https://your-tenant.auth0.com)"
 }
-variable "okta_groups_editor" {
-  description = "Okta group name mapped to Teleport editor role"
+variable "auth0_client_id" {
+  description = "Auth0 application client ID"
 }
-variable "okta_groups_access" {
-  description = "Okta group name mapped to Teleport access role"
+variable "auth0_client_secret" {
+  description = "Auth0 application client secret"
+  sensitive   = true
+}
+variable "auth0_groups_editor" {
+  description = "Auth0 role/group name mapped to Teleport editor role"
+}
+variable "auth0_groups_access" {
+  description = "Auth0 role/group name mapped to Teleport access role"
 }
 
 variable "skynet_api_key" {
@@ -318,9 +325,11 @@ locals {
     printf 'export SESSIONS_BUCKET=%s\n' "${aws_s3_bucket.teleport_sessions.bucket}" >> /home/ubuntu/.teleport-env
     printf 'export LICENSE_SECRET_NAME=%s\n' "${aws_secretsmanager_secret.teleport_license.name}" >> /home/ubuntu/.teleport-env
     printf 'export TELEPORT_OIDC_ROLE_ARN=%s\n' "${var.aws_oidc_role_arn}" >> /home/ubuntu/.teleport-env
-    printf 'export OKTA_METADATA_URL=%s\n' "${var.okta_metadata_url}" >> /home/ubuntu/.teleport-env
-    printf 'export OKTA_GROUPS_EDITOR=%s\n' "${var.okta_groups_editor}" >> /home/ubuntu/.teleport-env
-    printf 'export OKTA_GROUPS_ACCESS=%s\n' "${var.okta_groups_access}" >> /home/ubuntu/.teleport-env
+    printf 'export AUTH0_DOMAIN=%s\n' "${var.auth0_domain}" >> /home/ubuntu/.teleport-env
+    printf 'export AUTH0_CLIENT_ID=%s\n' "${var.auth0_client_id}" >> /home/ubuntu/.teleport-env
+    printf 'export AUTH0_CLIENT_SECRET=%s\n' "${var.auth0_client_secret}" >> /home/ubuntu/.teleport-env
+    printf 'export AUTH0_GROUPS_EDITOR=%s\n' "${var.auth0_groups_editor}" >> /home/ubuntu/.teleport-env
+    printf 'export AUTH0_GROUPS_ACCESS=%s\n' "${var.auth0_groups_access}" >> /home/ubuntu/.teleport-env
     printf 'export SKYNET_API_KEY=%s\n' "${var.skynet_api_key}" >> /home/ubuntu/.teleport-env
     printf 'export MCP_TOKEN_VALUE=%s\n' "${var.mcp_token_value}" >> /home/ubuntu/.teleport-env
     printf 'export GITHUB_REPOSITORY=grantvoss-teleport/tam-cert-noeks\n' >> /home/ubuntu/.teleport-env

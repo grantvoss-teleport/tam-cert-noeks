@@ -280,11 +280,11 @@
     path: /tmp/teleport-app-argocd.yaml
     state: absent
 
-# ── Pre-create teleport-rbac-files ConfigMap (roles only, no SAML) ────────────
-# The SAML connector references custom roles (base, okta_base) that don't exist
+# ── Pre-create teleport-rbac-files ConfigMap (roles only, no OIDC) ────────────
+# The OIDC connector references custom roles (base, okta_base) that don't exist
 # until ArgoCD's PostSync Job runs. To avoid a chicken-and-egg rejection from
-# tctl, the SAML connector is NOT included here. It is applied separately AFTER
-# ArgoCD has successfully synced all roles (see post-ArgoCD SAML update below).
+# tctl, the OIDC connector is NOT included here. It is applied separately AFTER
+# ArgoCD has successfully synced all roles (see post-ArgoCD OIDC update below).
 
 - name: Create empty teleport-rbac-files ConfigMap placeholder
   ansible.builtin.shell:
@@ -298,7 +298,7 @@
 
 # ── Deploy teleport-rbac ArgoCD Application ───────────────────────────────────
 # Applied AFTER the ConfigMap exists so ArgoCD can adopt it on first sync
-# and the PostSync Job immediately has the saml-okta.yaml entry available.
+# and the PostSync Job immediately has the oidc-auth0.yaml entry available.
 
 - name: Apply teleport-rbac ArgoCD Application
   ansible.builtin.command:
@@ -318,7 +318,7 @@
     cmd: |
       kubectl patch configmap argocd-cm -n argocd --type=merge -p '{
         "data": {
-          "resource.exclusions": "- apiGroups:\n  - \"\"\n  kinds:\n  - role\n  - login_rule\n  - cluster_auth_preference\n  - saml\n  - kube_cluster\n  - access_monitoring_rule\n  - inference_model\n  - inference_policy\n  clusters:\n  - \"*\"\n"
+          "resource.exclusions": "- apiGroups:\n  - \"\"\n  kinds:\n  - role\n  - login_rule\n  - cluster_auth_preference\n  - oidc\n  - kube_cluster\n  - access_monitoring_rule\n  - inference_model\n  - inference_policy\n  clusters:\n  - \"*\"\n"
         }
       }'
     executable: /bin/bash
@@ -356,54 +356,62 @@
   ansible.builtin.debug:
     msg: "{{ rbac_sync.stdout | default('Sync status check complete') }}"
 
-# ── Update SAML connector with full role mappings ─────────────────────────────
+# ── Update OIDC connector with full role mappings ─────────────────────────────
 # Now that ArgoCD has applied all custom roles (base, okta_base, etc.), we can
-# safely update the SAML connector to include the full attributes_to_roles
-# mapping. This replaces the bootstrap connector created in teleport-sso step 8.
+# safely update the OIDC connector to include the full claims_to_roles mapping.
+# This replaces the bootstrap connector created in teleport-sso step 8.
 
-- name: Source teleport-env to get Okta variables
+- name: Source teleport-env to get Auth0 variables
   ansible.builtin.shell:
     cmd: source /home/ubuntu/.teleport-env && env
     executable: /bin/bash
   register: teleport_env_vars
   changed_when: false
 
-- name: Set Okta facts from env file
+- name: Set Auth0 facts from env file
   ansible.builtin.set_fact:
-    okta_metadata_url:  "{{ teleport_env_vars.stdout | regex_search('OKTA_METADATA_URL=(.+)', '\\1') | first }}"
-    okta_groups_editor: "{{ teleport_env_vars.stdout | regex_search('OKTA_GROUPS_EDITOR=(.+)', '\\1') | first }}"
-    okta_groups_access: "{{ teleport_env_vars.stdout | regex_search('OKTA_GROUPS_ACCESS=(.+)', '\\1') | first }}"
+    auth0_domain:        "{{ teleport_env_vars.stdout | regex_search('AUTH0_DOMAIN=(.+)', '\\1') | first }}"
+    auth0_client_id:     "{{ teleport_env_vars.stdout | regex_search('AUTH0_CLIENT_ID=(.+)', '\\1') | first }}"
+    auth0_client_secret: "{{ teleport_env_vars.stdout | regex_search('AUTH0_CLIENT_SECRET=(.+)', '\\1') | first }}"
+    auth0_groups_editor: "{{ teleport_env_vars.stdout | regex_search('AUTH0_GROUPS_EDITOR=(.+)', '\\1') | first }}"
+    auth0_groups_access: "{{ teleport_env_vars.stdout | regex_search('AUTH0_GROUPS_ACCESS=(.+)', '\\1') | first }}"
 
-- name: Get auth pod name for SAML update
+- name: Get auth pod name for OIDC update
   ansible.builtin.command:
     cmd: >
       kubectl get pod -n teleport -l app.kubernetes.io/component=auth
       -o jsonpath='{.items[0].metadata.name}'
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
-  register: auth_pod_saml
+  register: auth_pod_oidc
   changed_when: false
 
-- name: Write full SAML connector to temp file
+- name: Write full OIDC connector to temp file
   ansible.builtin.copy:
-    dest: /tmp/saml-okta-full.yaml
+    dest: /tmp/oidc-auth0-full.yaml
     mode: "0600"
     content: |
-      kind: saml
-      version: v2
+      kind: oidc
+      version: v3
       metadata:
-        name: okta
+        name: auth0
       spec:
-        display: "Okta"
-        acs: "https://grant-tam-teleport.gvteleport.com/v1/webapi/saml/acs/okta"
-        entity_descriptor_url: "{{ okta_metadata_url }}"
-        attributes_to_roles:
-          - name: "groups"
+        display: "Auth0"
+        issuer_url: "{{ auth0_domain }}"
+        client_id: "{{ auth0_client_id }}"
+        client_secret: "{{ auth0_client_secret }}"
+        redirect_url: "https://grant-tam-teleport.gvteleport.com/v1/webapi/oidc/callback"
+        scope:
+          - openid
+          - profile
+          - email
+        claims_to_roles:
+          - claim: "groups"
             value: "*"
             roles:
               - base
-          - name: "groups"
-            value: "{{ okta_groups_editor }}"
+          - claim: "groups"
+            value: "{{ auth0_groups_editor }}"
             roles:
               - editor
               - access
@@ -411,59 +419,59 @@
               - okta_reviewer
               - mcp-ollama-tools
               - okta_app_access
-          - name: "groups"
-            value: "{{ okta_groups_access }}"
+          - claim: "groups"
+            value: "{{ auth0_groups_access }}"
             roles:
               - okta_base
 
-- name: Apply full SAML connector via ConfigMap mount
+- name: Apply full OIDC connector via ConfigMap mount
   ansible.builtin.shell:
     cmd: |
-      kubectl create configmap saml-full-patch -n teleport \
-        --from-file=saml-okta-full.yaml=/tmp/saml-okta-full.yaml \
+      kubectl create configmap oidc-full-patch -n teleport \
+        --from-file=oidc-auth0-full.yaml=/tmp/oidc-auth0-full.yaml \
         --dry-run=client -o yaml | kubectl apply -f -
       kubectl patch deployment teleport-auth -n teleport --type=json -p='[
-        {"op":"add","path":"/spec/template/spec/volumes/-","value":{"name":"saml-full","configMap":{"name":"saml-full-patch"}}},
-        {"op":"add","path":"/spec/template/spec/containers/0/volumeMounts/-","value":{"name":"saml-full","mountPath":"/tmp/saml-full","readOnly":true}}
+        {"op":"add","path":"/spec/template/spec/volumes/-","value":{"name":"oidc-full","configMap":{"name":"oidc-full-patch"}}},
+        {"op":"add","path":"/spec/template/spec/containers/0/volumeMounts/-","value":{"name":"oidc-full","mountPath":"/tmp/oidc-full","readOnly":true}}
       ]'
       kubectl rollout status deployment/teleport-auth -n teleport --timeout=120s
       AUTH_POD=$(kubectl get pod -n teleport -l app.kubernetes.io/component=auth -o jsonpath='{.items[0].metadata.name}')
-      kubectl exec -n teleport $AUTH_POD -- tctl create -f /tmp/saml-full/saml-okta-full.yaml
+      kubectl exec -n teleport $AUTH_POD -- tctl create -f /tmp/oidc-full/oidc-auth0-full.yaml
       MOUNT_IDX=$(kubectl get deployment teleport-auth -n teleport -o json | \
-        python3 -c "import json,sys; d=json.load(sys.stdin); mounts=d['spec']['template']['spec']['containers'][0].get('volumeMounts',[]); [print(i) for i,m in enumerate(mounts) if m['name']=='saml-full']")
+        python3 -c "import json,sys; d=json.load(sys.stdin); mounts=d['spec']['template']['spec']['containers'][0].get('volumeMounts',[]); [print(i) for i,m in enumerate(mounts) if m['name']=='oidc-full']")
       VOL_IDX=$(kubectl get deployment teleport-auth -n teleport -o json | \
-        python3 -c "import json,sys; d=json.load(sys.stdin); vols=d['spec']['template']['spec'].get('volumes',[]); [print(i) for i,v in enumerate(vols) if v['name']=='saml-full']")
+        python3 -c "import json,sys; d=json.load(sys.stdin); vols=d['spec']['template']['spec'].get('volumes',[]); [print(i) for i,v in enumerate(vols) if v['name']=='oidc-full']")
       kubectl patch deployment teleport-auth -n teleport --type=json \
         -p="[{\"op\":\"remove\",\"path\":\"/spec/template/spec/containers/0/volumeMounts/${MOUNT_IDX}\"},{\"op\":\"remove\",\"path\":\"/spec/template/spec/volumes/${VOL_IDX}\"}]"
-      kubectl delete configmap saml-full-patch -n teleport
-      rm /tmp/saml-okta-full.yaml
+      kubectl delete configmap oidc-full-patch -n teleport
+      rm /tmp/oidc-auth0-full.yaml
     executable: /bin/bash
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
   changed_when: true
 
-- name: Get auth pod name after SAML full patch rollout
+- name: Get auth pod name after OIDC full patch rollout
   ansible.builtin.command:
     cmd: >
       kubectl get pod -n teleport -l app.kubernetes.io/component=auth
       -o jsonpath='{.items[0].metadata.name}'
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
-  register: auth_pod_saml_after
+  register: auth_pod_oidc_after
   changed_when: false
 
-- name: Verify full SAML connector applied
+- name: Verify full OIDC connector applied
   ansible.builtin.command:
     cmd: >
-      kubectl exec -n teleport {{ auth_pod_saml_after.stdout }} -- tctl get saml/okta
+      kubectl exec -n teleport {{ auth_pod_oidc_after.stdout }} -- tctl get oidc/auth0
   environment:
     KUBECONFIG: /home/ubuntu/.kube/config
-  register: saml_verify
+  register: oidc_verify_full
   changed_when: false
 
-- name: Print SAML connector
+- name: Print OIDC connector
   ansible.builtin.debug:
-    msg: "{{ saml_verify.stdout_lines }}"
+    msg: "{{ oidc_verify_full.stdout_lines }}"
 
 # ── Apply AI inference secret ─────────────────────────────────────────────────
 # The inference_secret contains the Skynet API key which cannot be committed
