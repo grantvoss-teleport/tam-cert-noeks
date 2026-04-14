@@ -409,6 +409,7 @@ locals {
     # ── Fetch argocd app manifests (repo root, not under ansible/) ───────────
     ARGOCD_DIR="/home/ubuntu/ansible/argocd"
     for argocd_file in \
+      "apps/customers-app.yaml" \
       "apps/teleport-rbac-app.yaml" \
       "apps/teleport-rbac/rbac-syncer-rbac.yaml" \
       "apps/teleport-rbac/rbac-configmap.yaml" \
