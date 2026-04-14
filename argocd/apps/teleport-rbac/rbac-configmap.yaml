@@ -24,19 +24,6 @@ data:
         team:
           - external.groups
 
-  role-base.yaml: |
-    kind: role
-    version: v7
-    metadata:
-      name: base
-      description: "Base role: no standing privileges, assigned to all Okta users via SAML wildcard"
-    spec:
-      allow: {}
-      deny: {}
-      options:
-        max_session_ttl: 8h
-        lock: best_effort
-
   role-auto-approver.yaml: |
     kind: role
     version: v7

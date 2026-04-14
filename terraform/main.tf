@@ -414,7 +414,6 @@ locals {
       "apps/teleport-rbac/rbac-configmap.yaml" \
       "apps/teleport-rbac/rbac-sync-job.yaml" \
       "apps/teleport-rbac/resources/login-rule-okta-team.yaml" \
-      "apps/teleport-rbac/resources/role-base.yaml" \
       "apps/teleport-rbac/resources/role-auto-approver.yaml" \
       "apps/teleport-rbac/resources/cluster-auth-preference.yaml" \
       "apps/teleport-rbac/resources/kube-cluster-label.yaml"; do

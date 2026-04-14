@@ -281,7 +281,7 @@
     state: absent
 
 # ── Pre-create teleport-rbac-files ConfigMap (roles only, no OIDC) ────────────
-# The OIDC connector references custom roles (base, okta_base) that don't exist
+# The OIDC connector references custom roles (okta_base) that don't exist
 # until ArgoCD's PostSync Job runs. To avoid a chicken-and-egg rejection from
 # tctl, the OIDC connector is NOT included here. It is applied separately AFTER
 # ArgoCD has successfully synced all roles (see post-ArgoCD OIDC update below).
@@ -364,7 +364,7 @@
     msg: "{{ rbac_sync.stdout | default('Sync status check complete') }}"
 
 # ── Update OIDC connector with full role mappings ─────────────────────────────
-# Now that ArgoCD has applied all custom roles (base, okta_base, etc.), we can
+# Now that ArgoCD has applied all custom roles (okta_base, etc.), we can
 # safely update the OIDC connector to include the full claims_to_roles mapping.
 # This replaces the bootstrap connector created in teleport-sso step 8.
 
@@ -413,10 +413,6 @@
           - profile
           - email
         claims_to_roles:
-          - claim: "groups"
-            value: "*"
-            roles:
-              - base
           - claim: "groups"
             value: "{{ auth0_groups_editor }}"
             roles:

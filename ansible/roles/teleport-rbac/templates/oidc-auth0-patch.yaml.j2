@@ -13,11 +13,8 @@ spec:
     - profile
     - email
   claims_to_roles:
-    # Wildcard: every Auth0 user gets base regardless of group.
-    # Ensures all authenticated users start with zero standing privilege.
-    - { claim: "groups", value: "*",                         roles: ["base"] }
     # Editor group: full editor + access standing privileges + explicit app access.
-    - { claim: "groups", value: "{{ auth0_groups_editor }}", roles: ["editor", "access", "okta_app_access"] }
+    - { claim: "groups", value: "{{ auth0_groups_editor }}", roles: ["editor", "access", "auditor", "okta_reviewer", "mcp-ollama-tools", "okta_app_access"] }
     # Access group: mapped to okta_base only — no standing privileges.
     # Users must submit an Access Request for okta_ssh, okta_kube, or okta_ssh_root.
     - { claim: "groups", value: "{{ auth0_groups_access }}", roles: ["okta_base"] }

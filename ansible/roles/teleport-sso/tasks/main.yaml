@@ -5,7 +5,6 @@
 # SSO connector before the Machine ID GitHub Actions workflow takes over.
 #
 # What this role does NOT do (handled by GitHub Actions + Machine ID):
-#   - Patching the connector with the base role wildcard mapping
 #   - Setting cluster_auth_preference (auth type / default connector)
 # Those are managed by .github/workflows/teleport-rbac.yml via tbot/tctl
 # so that all auth config changes go through the same audited, secretless path.
@@ -31,7 +30,7 @@
 # Creates a bootstrap connector with editor + access mappings using only
 # built-in Teleport roles (no custom roles exist yet at this step).
 # The argocd role (step 11) updates this connector after ArgoCD has applied
-# all custom roles, adding the base wildcard and okta_base mappings.
+# all custom roles, adding the okta_base mapping.
 #
 # Uses ConfigMap mount pattern — kubectl exec -i stdin truncates on distroless.
 
@@ -161,5 +160,5 @@
     msg: >
       Bootstrap Auth0 OIDC connector created (built-in roles only).
       The argocd role (step 11) will update this connector with the full
-      claims_to_roles mapping including base and okta_base after
+      claims_to_roles mapping including okta_base after
       ArgoCD has applied all custom roles.
