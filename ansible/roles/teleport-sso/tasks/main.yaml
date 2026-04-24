@@ -54,13 +54,13 @@
           - profile
           - email
         claims_to_roles:
-          - claim: "groups"
+          - claim: "https://teleport.gvteleport.com/groups"
             value: "{{ auth0_groups_editor }}"
             roles:
               - editor
               - access
               - auditor
-          - claim: "groups"
+          - claim: "https://teleport.gvteleport.com/groups"
             value: "{{ auth0_groups_access }}"
             roles:
               - access
