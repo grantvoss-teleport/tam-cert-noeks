@@ -93,6 +93,10 @@ spec:
                 -o jsonpath='{.items[0].metadata.name}')
               echo "Auth pod after mount: ${AUTH_POD}"
 
+              echo "=== Waiting for auth pod to be ready ==="
+              kubectl wait pod "${AUTH_POD}" -n teleport \
+                --for=condition=Ready --timeout=180s
+
               echo "=== Applying RBAC resources via tctl ==="
               set +e
               for f in \
@@ -126,6 +130,12 @@ spec:
                 tctl create --confirm -f "/tmp/rbac-sync/kube-cluster-label.yaml" \
                 && echo "kube-cluster-label.yaml: OK" \
                 || echo "kube-cluster-label.yaml: WARN (cluster may not be registered yet)"
+
+              echo "=== Removing deprecated resources ==="
+              kubectl exec -n teleport "${AUTH_POD}" -- \
+                tctl rm role/base 2>/dev/null \
+                && echo "role/base: removed" \
+                || echo "role/base: already absent (ok)"
               set -e
 
               echo "=== RBAC sync complete ==="
