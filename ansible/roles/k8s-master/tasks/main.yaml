@@ -36,14 +36,14 @@
 
 - name: Install Calico CNI operator
   ansible.builtin.command:
-    cmd: kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.29.0/manifests/tigera-operator.yaml
+    cmd: kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.29.0/manifests/tigera-operator.yaml
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
   changed_when: true
 
 - name: Install Calico custom resources
   ansible.builtin.command:
-    cmd: kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.29.0/manifests/custom-resources.yaml
+    cmd: kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.29.0/manifests/custom-resources.yaml
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
   changed_when: true
