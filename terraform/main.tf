@@ -397,6 +397,7 @@ locals {
       "roles/teleport-rbac/tasks/main.yaml" \
       "roles/teleport-rbac/templates/machine-id-bot.yaml.j2" \
       "roles/teleport-rbac/templates/role-rbac-manager.yaml.j2" \
+      "roles/teleport-rbac/templates/oidc-auth0-patch.yaml.j2" \
       "roles/teleport-node/tasks/main.yaml" \
       "roles/teleport-node/templates/ssh-node-iam-token.yaml.j2" \
       "roles/argocd/tasks/main.yaml" \
