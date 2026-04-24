@@ -13,8 +13,9 @@ spec:
     - profile
     - email
   claims_to_roles:
+    # Auth0 namespaces custom claims — claim name must match exactly what Auth0 sends in the JWT.
     # Editor group: full editor + access standing privileges + explicit app access.
-    - { claim: "groups", value: "{{ auth0_groups_editor }}", roles: ["editor", "access", "auditor", "okta_reviewer", "mcp-ollama-tools", "okta_app_access"] }
+    - { claim: "https://teleport.gvteleport.com/groups", value: "{{ auth0_groups_editor }}", roles: ["editor", "access", "auditor", "okta_reviewer", "mcp-ollama-tools", "okta_app_access"] }
     # Access group: mapped to okta_base only — no standing privileges.
     # Users must submit an Access Request for okta_ssh, okta_kube, or okta_ssh_root.
-    - { claim: "groups", value: "{{ auth0_groups_access }}", roles: ["okta_base"] }
+    - { claim: "https://teleport.gvteleport.com/groups", value: "{{ auth0_groups_access }}", roles: ["okta_base"] }
