@@ -368,6 +368,7 @@ locals {
     mkdir -p "$ANSIBLE_DIR/roles/argocd/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/argocd/templates"
     mkdir -p "$ANSIBLE_DIR/argocd/apps/teleport-rbac/resources"
+    mkdir -p "$ANSIBLE_DIR/argocd/apps/customers"
     mkdir -p "$ANSIBLE_DIR/roles/postgres/tasks"
     mkdir -p "$ANSIBLE_DIR/roles/postgres/files"
     mkdir -p "$ANSIBLE_DIR/roles/postgres/templates"
@@ -397,6 +398,7 @@ locals {
       "roles/teleport-rbac/tasks/main.yaml" \
       "roles/teleport-rbac/templates/machine-id-bot.yaml.j2" \
       "roles/teleport-rbac/templates/role-rbac-manager.yaml.j2" \
+      "roles/teleport-rbac/templates/oidc-auth0-patch.yaml.j2" \
       "roles/teleport-node/tasks/main.yaml" \
       "roles/teleport-node/templates/ssh-node-iam-token.yaml.j2" \
       "roles/argocd/tasks/main.yaml" \
@@ -416,7 +418,10 @@ locals {
       "apps/teleport-rbac/resources/login-rule-okta-team.yaml" \
       "apps/teleport-rbac/resources/role-auto-approver.yaml" \
       "apps/teleport-rbac/resources/cluster-auth-preference.yaml" \
-      "apps/teleport-rbac/resources/kube-cluster-label.yaml"; do
+      "apps/teleport-rbac/resources/kube-cluster-label.yaml" \
+      "apps/customers-app.yaml" \
+      "apps/customers/mysql-pvc.yaml" \
+      "apps/customers/customers-api-deployment.yaml"; do
       echo "Fetching argocd/$argocd_file..."
       rm -f "$ARGOCD_DIR/$argocd_file"
       curl -fsSL "$REPO/argocd/$argocd_file" -o "$ARGOCD_DIR/$argocd_file" || { echo "ERROR: failed to fetch argocd/$argocd_file"; exit 1; }

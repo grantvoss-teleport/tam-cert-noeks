@@ -100,7 +100,6 @@ spec:
               echo "=== Applying RBAC resources via tctl ==="
               set +e
               for f in \
-                login-rule-okta-team.yaml \
                 role-auto-approver.yaml \
                 role-okta-kube.yaml \
                 role-okta-ssh.yaml \
